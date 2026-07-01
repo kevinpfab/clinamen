@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="plankA" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b99860"/>
+      <stop offset="0.45" stop-color="#d2b77f"/>
+      <stop offset="1" stop-color="#ba9b63"/>
+    </linearGradient>
+    <linearGradient id="plankB" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c5a66f"/>
+      <stop offset="0.55" stop-color="#ddc18a"/>
+      <stop offset="1" stop-color="#c0a06b"/>
+    </linearGradient>
+    <pattern id="grain" width="128" height="1024" patternUnits="userSpaceOnUse">
+      <rect width="128" height="1024" fill="url(#plankA)"/>
+      <rect x="0" width="2" height="1024" fill="#54331d" opacity="0.42"/>
+      <rect x="125" width="1" height="1024" fill="#fff0c8" opacity="0.22"/>
+      <path d="M18 -8 C25 260 8 520 22 1032" fill="none" stroke="#56371f" stroke-width="1.5" opacity="0.16"/>
+      <path d="M34 -8 C41 320 25 620 38 1032" fill="none" stroke="#fff2cd" stroke-width="0.8" opacity="0.12"/>
+      <path d="M50 -8 C39 240 62 610 48 1032" fill="none" stroke="#4c301b" stroke-width="2.1" opacity="0.12"/>
+      <path d="M72 -8 C84 260 60 710 78 1032" fill="none" stroke="#624127" stroke-width="1.3" opacity="0.13"/>
+      <path d="M96 -8 C88 310 112 660 92 1032" fill="none" stroke="#fff1c8" stroke-width="0.9" opacity="0.10"/>
+      <path d="M112 -8 C118 240 104 580 118 1032" fill="none" stroke="#5b3a21" stroke-width="1.7" opacity="0.12"/>
+    </pattern>
+    <pattern id="grainAlt" width="128" height="1024" patternUnits="userSpaceOnUse">
+      <rect width="128" height="1024" fill="url(#plankB)"/>
+      <rect x="0" width="2" height="1024" fill="#57381f" opacity="0.38"/>
+      <rect x="125" width="1" height="1024" fill="#fff1cc" opacity="0.18"/>
+      <path d="M16 -8 C5 300 30 580 12 1032" fill="none" stroke="#51341e" stroke-width="1.8" opacity="0.13"/>
+      <path d="M40 -8 C53 260 32 660 48 1032" fill="none" stroke="#fff2ce" stroke-width="0.9" opacity="0.10"/>
+      <path d="M58 -8 C66 280 49 610 64 1032" fill="none" stroke="#4b2f1a" stroke-width="1.3" opacity="0.13"/>
+      <path d="M82 -8 C72 350 94 620 78 1032" fill="none" stroke="#604026" stroke-width="2.1" opacity="0.11"/>
+      <path d="M108 -8 C116 270 98 700 114 1032" fill="none" stroke="#fff0c9" stroke-width="0.8" opacity="0.10"/>
+    </pattern>
+  </defs>
+  <rect width="128" height="1024" x="0" fill="url(#grain)"/>
+  <rect width="128" height="1024" x="128" fill="url(#grainAlt)"/>
+  <rect width="128" height="1024" x="256" fill="url(#grain)"/>
+  <rect width="128" height="1024" x="384" fill="url(#grainAlt)"/>
+  <rect width="128" height="1024" x="512" fill="url(#grain)"/>
+  <rect width="128" height="1024" x="640" fill="url(#grainAlt)"/>
+  <rect width="128" height="1024" x="768" fill="url(#grain)"/>
+  <rect width="128" height="1024" x="896" fill="url(#grainAlt)"/>
+  <ellipse cx="188" cy="310" rx="22" ry="34" fill="none" stroke="#55351e" stroke-width="2" opacity="0.24"/>
+  <ellipse cx="188" cy="310" rx="10" ry="16" fill="#402413" opacity="0.18"/>
+  <ellipse cx="704" cy="710" rx="26" ry="40" fill="none" stroke="#55351e" stroke-width="2" opacity="0.20"/>
+  <ellipse cx="704" cy="710" rx="12" ry="18" fill="#402413" opacity="0.15"/>
+</svg>
