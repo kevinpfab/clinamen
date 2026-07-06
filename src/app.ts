@@ -49,6 +49,7 @@ import { addCollisionRipple, updateRipples } from "./water/ripples";
 import { disposeBowlField, updateBowlField } from "./water/bowl-field";
 import { disposeInteractionField, updateInteractionField } from "./water/interaction-field";
 import { disposeWaveState, updateWaveState } from "./water/wave-state";
+import { disposeWaterSampler, updateWaterSampler } from "./water/water-sampler";
 import { BasinAudio } from "./audio/basin-audio";
 import { EventBus, type BasinEvents } from "./core/events";
 import { createGpuFrameTimer, type GpuTimingSnapshot } from "./core/gpu-timer";
@@ -362,6 +363,7 @@ function animate(now: DOMHighResTimeStamp) {
   updateWaterSimulationForFrame(delta);
   recordStep?.("waterSim");
   updateWaveState();
+  updateWaterSampler();
   recordStep?.("waveState");
   renderer.render(scene, camera);
   gpuFrameTimer?.endFrame();
@@ -469,6 +471,7 @@ export function disposeApp(options: DisposeAppOptions = {}) {
     disposeInteractionField();
     disposeBowlField();
     disposeWaveState();
+    disposeWaterSampler();
     disposeWaterSimulation();
     disposeFlowJets();
     disposeWaterSurface();
