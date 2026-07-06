@@ -125,6 +125,7 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
     uFlowJetData: waterUniforms.uFlowJetData,
     uFlowJetParams: waterUniforms.uFlowJetParams,
     uFlowJetCount: waterUniforms.uFlowJetCount,
+    uSceneDim: waterUniforms.uSceneDim,
     uOpacity: { value: 0.5 },
   },
   vertexShader: `
@@ -347,6 +348,7 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
     precision highp float;
 
     uniform float uOpacity;
+    uniform float uSceneDim;
     uniform vec4 uPoolData;
 
     varying vec3 vWorldPosition;
@@ -377,7 +379,7 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
       if (alpha <= 0.001) {
         discard;
       }
-      gl_FragColor = vec4(color, alpha);
+      gl_FragColor = vec4(color * uSceneDim, alpha);
     }
   `,
   transparent: true,

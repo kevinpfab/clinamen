@@ -70,6 +70,12 @@ export const waterInteractionFieldSize = isMobilePerformanceTarget ? 256 : 384;
 // analytic ripple layers use the same value so both ring systems co-travel.
 export const waterWaveSpeed = 1.15;
 
+// --- Intro emergence ---
+// How far below its resting plane a bowl sits while it waits to surface
+// during the intro reveal. Deep enough that even the tallest rim hides
+// beneath the opaque basin floor (-0.58) until its rise begins.
+export const bowlEmergenceDepth = 1.35;
+
 // --- Motion / physics tuning ---
 export const velocityWorldScale = 4.2;
 export const maxDragWorldSpeed = 3.4;

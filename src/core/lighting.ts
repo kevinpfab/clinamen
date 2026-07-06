@@ -3,6 +3,9 @@ import { enableSceneShadows } from "../config";
 import { scene } from "./stage";
 
 export type LightingSystem = {
+  // Exposed so the intro can fade the world lights from black.
+  hemisphere: THREE.HemisphereLight;
+  key: THREE.DirectionalLight;
   dispose: () => void;
 };
 
@@ -39,6 +42,8 @@ export function createLighting(targetScene = scene): LightingSystem {
   targetScene.add(rimLight);
 
   return {
+    hemisphere: ambientLight,
+    key: keyLight,
     dispose() {
       targetScene.remove(ambientLight, keyLight, keyLight.target, fillLight, rimLight);
     },

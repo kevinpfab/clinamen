@@ -25,15 +25,6 @@ export type FpsCounter = {
   destroy: () => void;
 };
 
-export type AudioStartButton = {
-  setStarted: () => void;
-  destroy: () => void;
-};
-
-type AudioStartButtonOptions = {
-  onStartAudio: () => Promise<void>;
-};
-
 function formatNumber(value: number) {
   return String(Math.round(value));
 }
@@ -73,55 +64,6 @@ function createMetricRow(label: string) {
 
   row.append(labelElement, valueElement);
   return { row, valueElement };
-}
-
-export function createAudioStartButton(options: AudioStartButtonOptions): AudioStartButton {
-  const element = document.createElement("button");
-  element.className = "audio-start";
-  element.type = "button";
-  element.setAttribute("aria-label", "Start audio");
-
-  const label = document.createElement("span");
-  label.className = "audio-start__label";
-  label.textContent = "Start audio";
-  element.append(label);
-
-  let audioStartPending = false;
-  let started = false;
-
-  element.addEventListener("pointerdown", (event) => {
-    event.stopPropagation();
-  });
-
-  element.addEventListener("click", async () => {
-    if (started || audioStartPending) {
-      return;
-    }
-
-    audioStartPending = true;
-    element.setAttribute("aria-disabled", "true");
-    try {
-      await options.onStartAudio();
-      started = true;
-      element.remove();
-    } catch (error) {
-      audioStartPending = false;
-      element.removeAttribute("aria-disabled");
-      console.error("Microtonal Basin could not start audio.", error);
-    }
-  });
-
-  document.body.append(element);
-
-  return {
-    setStarted() {
-      started = true;
-      element.remove();
-    },
-    destroy() {
-      element.remove();
-    },
-  };
 }
 
 export function createFpsCounter(): FpsCounter {

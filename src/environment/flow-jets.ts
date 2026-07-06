@@ -65,6 +65,7 @@ export const flowJetAerationUniforms = {
   uFlowJetData: waterUniforms.uFlowJetData,
   uFlowJetParams: waterUniforms.uFlowJetParams,
   uFlowJetCount: waterUniforms.uFlowJetCount,
+  uSceneDim: waterUniforms.uSceneDim,
   uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
 };
 export const flowJetAerationMaterial = new THREE.ShaderMaterial({
@@ -142,6 +143,8 @@ export const flowJetAerationMaterial = new THREE.ShaderMaterial({
   fragmentShader: `
     precision highp float;
 
+    uniform float uSceneDim;
+
     varying float vAlpha;
     varying float vEdgeLight;
     varying float vHighlight;
@@ -161,7 +164,7 @@ export const flowJetAerationMaterial = new THREE.ShaderMaterial({
       vec3 aerationBlue = vec3(0.56, 0.94, 0.98);
       vec3 pearlyWhite = vec3(0.96, 1.0, 0.98);
       vec3 color = mix(aerationBlue, pearlyWhite, clamp(rim * 0.44 + highlight * 0.82, 0.0, 1.0));
-      gl_FragColor = vec4(color, alpha);
+      gl_FragColor = vec4(color * uSceneDim, alpha);
     }
   `,
   transparent: true,

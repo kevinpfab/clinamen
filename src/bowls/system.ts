@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import {
   bowlCollisionSettings,
+  bowlEmergenceDepth,
   bowlImpactCooldown,
   debugSettings,
   simulationSettings,
@@ -70,9 +71,15 @@ export class BowlSystem {
     const poolRadius = getWaterSurfaceRadius();
 
     for (const bowl of this.bowlsInternal) {
-      bowl.mesh.position.y = getBowlPlaneY(bowl.radius);
+      bowl.mesh.position.y = getBowlPlaneY(bowl.radius)
+        - bowlEmergenceDepth * (1 - bowl.emergence);
       bowl.visual.rotation.x = 0;
       bowl.visual.rotation.z = 0;
+
+      // Surfacing bowls hold their position until they fully emerge.
+      if (bowl.emergence < 1) {
+        continue;
+      }
 
       if (draggedBowl === bowl) {
         bowl.mesh.rotation.y += bowl.angularVelocity * delta * 0.30;
@@ -153,6 +160,10 @@ export class BowlSystem {
     let selectedDistance = Number.POSITIVE_INFINITY;
 
     for (const bowl of this.bowlsInternal) {
+      if (bowl.emergence < 1) {
+        continue;
+      }
+
       const distance = Math.hypot(
         point.x - bowl.mesh.position.x,
         point.y - bowl.mesh.position.z,
@@ -268,6 +279,7 @@ export class BowlSystem {
         contactRadius,
         toneRatio: getToneRatio(radius),
         velocity: new THREE.Vector2(Math.cos(direction), Math.sin(direction)).multiplyScalar(speed),
+        emergence: 1,
         momentumStrength: 0,
         angularVelocity: (i % 2 === 0 ? 1 : -1) * (0.035 + (i % 5) * 0.006),
         lastImpactAt: -10,
@@ -341,7 +353,9 @@ export class BowlSystem {
       body.vz = bowl.velocity.y;
       body.massRadius = bowl.radius;
       body.contactRadius = bowl.contactRadius;
-      body.inverseMass = draggedBowl === bowl ? 0 : 1 / Math.max(bowl.radius, 0.001);
+      body.inverseMass = draggedBowl === bowl || bowl.emergence < 1
+        ? 0
+        : 1 / Math.max(bowl.radius, 0.001);
       this.collisionBodies[i] = body;
     }
   }
@@ -349,7 +363,7 @@ export class BowlSystem {
   private emitCollisionEvent(event: BowlCollisionEvent, now: number) {
     const a = this.bowlsInternal[event.aId];
     const b = this.bowlsInternal[event.bId];
-    if (!a || !b) {
+    if (!a || !b || a.emergence < 1 || b.emergence < 1) {
       return;
     }
 

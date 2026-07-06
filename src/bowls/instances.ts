@@ -38,11 +38,12 @@ function setBowlMatrix(
   index: number,
   bowl: BowlBody,
   y: number,
+  scale = 1,
 ) {
   bowlPosition.set(bowl.mesh.position.x, y, bowl.mesh.position.z);
   bowlRotation.set(bowl.visual.rotation.x, bowl.mesh.rotation.y, bowl.visual.rotation.z);
   bowlQuaternion.setFromEuler(bowlRotation);
-  bowlScale.setScalar(bowl.radius);
+  bowlScale.setScalar(bowl.radius * Math.max(scale, 0.0001));
   bowlMatrix.compose(bowlPosition, bowlQuaternion, bowlScale);
   mesh.setMatrixAt(index, bowlMatrix);
 }
@@ -117,7 +118,15 @@ export class BowlInstanceRenderer {
       const resonance = bowl.resonance;
 
       setBowlMatrix(this.shells, index, bowl, bowl.mesh.position.y);
-      setBowlMatrix(this.reflections, index, bowl, waterPlaneY * 2 - bowl.mesh.position.y);
+      // A submerged bowl has no mirror image; grow the reflection back in as
+      // the bowl breaks the surface.
+      setBowlMatrix(
+        this.reflections,
+        index,
+        bowl,
+        waterPlaneY * 2 - bowl.mesh.position.y,
+        THREE.MathUtils.smoothstep(bowl.emergence, 0.82, 1),
+      );
       setBowlMatrix(this.rims, index, bowl, bowl.mesh.position.y + getBowlRimY(bowl.radius));
 
       this.toneRatios.setX(index, bowl.toneRatio);

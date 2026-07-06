@@ -37,12 +37,11 @@ import {
 } from "./environment/flow-jets";
 import { createFlowShapeControl } from "./ui/flow-shape-control";
 import {
-  createAudioStartButton,
   createFpsCounter,
-  type AudioStartButton,
   type FpsCounter,
   type FpsCounterDiagnostics,
 } from "./ui/fps-counter";
+import { createIntroSequence, type IntroSequence } from "./intro/intro";
 import { createLighting } from "./core/lighting";
 import { disposeBowlSharedMaterials } from "./bowls/materials";
 import { addCollisionRipple, updateRipples } from "./water/ripples";
@@ -61,9 +60,9 @@ const bus = new EventBus<BasinEvents>();
 const bowlSystem = new BowlSystem(bus);
 const lighting = createLighting();
 let pointerController: PointerController | null = null;
+let intro: IntroSequence | null = null;
 let audioEngine: BasinAudio | null = null;
 let audioStartPromise: Promise<void> | null = null;
-let audioStartButton: AudioStartButton | null = null;
 let animationFrame = 0;
 let waterSimulationAccumulator = 0;
 let disposed = false;
@@ -343,14 +342,16 @@ function animate(now: DOMHighResTimeStamp) {
   const elapsed = clock.elapsedTime;
   waterUniforms.uTime.value = elapsed;
 
-  bowlSystem.update(delta, elapsed, pointerController?.getDraggedBowl() ?? null);
+  const heldBowl = intro?.getPinnedBowl() ?? pointerController?.getDraggedBowl() ?? null;
+  bowlSystem.update(delta, elapsed, heldBowl);
   recordStep?.("bowls");
-  bowlSystem.resolveCollisions(elapsed, pointerController?.getDraggedBowl() ?? null);
+  bowlSystem.resolveCollisions(elapsed, heldBowl);
   recordStep?.("collisions");
   updateRipples(delta);
   recordStep?.("ripples");
   bowlSystem.updateResonance(delta);
   recordStep?.("resonance");
+  intro?.update(delta);
   bowlSystem.updateInstances();
   recordStep?.("instances");
   gpuFrameTimer?.beginFrame();
@@ -412,7 +413,6 @@ async function startAudio() {
     audioEngine.setMasterVolume(debugSettings.masterVolume);
     audioEngine.setToneGain(debugSettings.toneGain);
     await audioEngine.resume();
-    audioStartButton?.setStarted();
   })();
 
   try {
@@ -448,6 +448,8 @@ export function disposeApp(options: DisposeAppOptions = {}) {
   const disposeSharedResources = options.disposeSharedResources ?? true;
 
   stopAnimationLoop();
+  intro?.dispose();
+  intro = null;
   pointerController?.dispose();
   pointerController = null;
   window.removeEventListener("pointerdown", handleGlobalAudioPointerDown);
@@ -456,8 +458,6 @@ export function disposeApp(options: DisposeAppOptions = {}) {
   window.removeEventListener("beforeunload", handleBeforeUnload);
   offRipple();
   offTone();
-  audioStartButton?.destroy();
-  audioStartButton = null;
   fpsCounter?.destroy();
   fpsCounter = null;
   flowShapeControl?.destroy();
@@ -496,10 +496,26 @@ const offTone = bus.on("tone", ({ sizeRatio, strength }) => {
 clearWaterState();
 updateWorldSize();
 bowlSystem.rebuild();
-pointerController = createPointerController({
-  bowlSystem,
-});
-audioStartButton = createAudioStartButton({ onStartAudio: startAudio });
+// The title screen owns the first interaction (its strike doubles as the
+// audio-unlock gesture); pointer orbit/drag controls attach once it hands off.
+const skipIntro = import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).has("skipIntro");
+if (skipIntro) {
+  pointerController = createPointerController({ bowlSystem });
+} else {
+  intro = createIntroSequence({
+    bus,
+    bowlSystem,
+    lighting,
+    startAudio,
+    onComplete: () => {
+      if (disposed) {
+        return;
+      }
+      pointerController = createPointerController({ bowlSystem });
+    },
+  });
+}
 const flowShapeControl = createFlowShapeControl({
   getFlowShape: () => simulationSettings.flowShape,
   getBowlCount: () => simulationSettings.bowlCount,

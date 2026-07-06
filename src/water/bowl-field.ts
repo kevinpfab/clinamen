@@ -209,19 +209,28 @@ const previousClearColor = new THREE.Color();
 
 export function updateBowlField(bowls: BowlBody[]) {
   const visibleBowlCount = Math.min(bowls.length, maxWaterBowls);
+  let splatCount = 0;
   for (let i = 0; i < visibleBowlCount; i += 1) {
     const bowl = bowls[i];
-    const wakeStrength = THREE.MathUtils.clamp(bowl.velocity.length() * 8.5, 0, 1);
-    bowlDataAttribute.array[i * 4] = bowl.mesh.position.x;
-    bowlDataAttribute.array[i * 4 + 1] = bowl.mesh.position.z;
-    bowlDataAttribute.array[i * 4 + 2] = bowl.radius;
-    bowlDataAttribute.array[i * 4 + 3] = wakeStrength;
-    bowlVelocityAttribute.array[i * 2] = bowl.velocity.x;
-    bowlVelocityAttribute.array[i * 2 + 1] = bowl.velocity.y;
+    // Submerged bowls leave the surface untouched; the waterline circle grows
+    // in as the rim breaks through near full emergence.
+    const surfacing = THREE.MathUtils.smoothstep(bowl.emergence, 0.82, 1);
+    if (surfacing <= 0.001) {
+      continue;
+    }
+    const wakeStrength =
+      THREE.MathUtils.clamp(bowl.velocity.length() * 8.5, 0, 1) * surfacing;
+    bowlDataAttribute.array[splatCount * 4] = bowl.mesh.position.x;
+    bowlDataAttribute.array[splatCount * 4 + 1] = bowl.mesh.position.z;
+    bowlDataAttribute.array[splatCount * 4 + 2] = bowl.radius * (0.55 + 0.45 * surfacing);
+    bowlDataAttribute.array[splatCount * 4 + 3] = wakeStrength;
+    bowlVelocityAttribute.array[splatCount * 2] = bowl.velocity.x * surfacing;
+    bowlVelocityAttribute.array[splatCount * 2 + 1] = bowl.velocity.y * surfacing;
+    splatCount += 1;
   }
   bowlDataAttribute.needsUpdate = true;
   bowlVelocityAttribute.needsUpdate = true;
-  bowlSplatGeometry.instanceCount = visibleBowlCount;
+  bowlSplatGeometry.instanceCount = splatCount;
 
   renderer.getClearColor(previousClearColor);
   const previousClearAlpha = renderer.getClearAlpha();

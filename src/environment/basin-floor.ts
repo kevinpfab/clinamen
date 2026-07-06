@@ -22,6 +22,7 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
     precision highp float;
 
     uniform float uTime;
+    uniform float uSceneDim;
     uniform sampler2D uWaveStateMap;
     uniform sampler2D uWaveDetailMap;
     uniform sampler2D uWaveDerivedMap;
@@ -133,7 +134,7 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
       color = mix(color, vec3(0.000, 0.070, 0.105), shadow);
       color *= 1.0 - edge * 0.08;
 
-      gl_FragColor = vec4(color, 1.0);
+      gl_FragColor = vec4(color * uSceneDim, 1.0);
     }
   `,
 });

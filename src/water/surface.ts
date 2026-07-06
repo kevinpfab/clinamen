@@ -23,6 +23,7 @@ export const waterMaterial = new THREE.ShaderMaterial({
     precision highp float;
 
     uniform float uTime;
+    uniform float uSceneDim;
     uniform sampler2D uWaveStateMap;
     uniform sampler2D uWaveDetailMap;
     uniform sampler2D uWaveDerivedMap;
@@ -242,7 +243,7 @@ export const waterMaterial = new THREE.ShaderMaterial({
         0.95
       );
       waterAlpha *= 1.0 - bowlOcclusion;
-      gl_FragColor = vec4(color, waterAlpha);
+      gl_FragColor = vec4(color * uSceneDim, waterAlpha);
     }
   `,
   transparent: true,

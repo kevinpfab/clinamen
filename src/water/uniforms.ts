@@ -9,6 +9,10 @@ import type { WaterUniforms } from "./types";
 export const waterUniforms = THREE.UniformsUtils.merge([
   {
     uTime: { value: 0 },
+    // Global brightness for the unlit custom shaders (water, basin floor,
+    // reflections, spray). Tone-mapping exposure only reaches lit materials,
+    // so the intro reveal drives both together.
+    uSceneDim: { value: 1 },
     uHeightMap: { value: null },
     uBowlFieldMap: { value: null },
     uInteractionFieldMap: { value: null },
