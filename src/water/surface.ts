@@ -39,10 +39,13 @@ export const waterMaterial = new THREE.ShaderMaterial({
       return texture2D(uNoiseMap, p * ${(1 / noisePeriod).toFixed(6)}).r;
     }
 
-    float waveLayer(vec2 p, vec2 direction, float speed, float scale, float weight) {
+    float waveLayer(vec2 p, vec2 direction, float speed, float scale, float ratio, float weight) {
       vec2 tangent = vec2(-direction.y, direction.x);
-      float a = sin((dot(p, direction) * scale + uTime * speed) * BASIN_TAU);
-      float b = cos((dot(p, tangent) * scale * 0.72 - uTime * speed * 0.62) * BASIN_TAU);
+      // Slow spatial phase drift decouples the sin/cos pair so the layer
+      // stops reading as an egg-crate lattice.
+      float drift = valueNoise(p * 0.052 + direction * 3.7) - 0.5;
+      float a = sin((dot(p, direction) * scale + uTime * speed + drift * 0.22) * BASIN_TAU);
+      float b = cos((dot(p, tangent) * scale * ratio - uTime * speed * 0.62 - drift * 0.30) * BASIN_TAU);
       return (a + b) * 0.5 * weight;
     }
 
@@ -57,9 +60,9 @@ export const waterMaterial = new THREE.ShaderMaterial({
       ) - 0.5;
       vec2 q = p + broadWarp * 0.86 + fineWarp * 0.14;
       float surface = 0.0;
-      surface += waveLayer(q, normalize(vec2(1.0, 0.34)), 0.021, 0.058, 0.34);
-      surface += waveLayer(q + vec2(2.4, -1.8), normalize(vec2(-0.42, 1.0)), 0.034, 0.108, 0.22);
-      surface += waveLayer(q + vec2(-0.7, 2.1), normalize(vec2(0.80, -0.60)), 0.048, 0.174, 0.11);
+      surface += waveLayer(q, normalize(vec2(1.0, 0.34)), 0.021, 0.058, 0.67, 0.34);
+      surface += waveLayer(q + vec2(2.4, -1.8), normalize(vec2(-0.42, 1.0)), 0.034, 0.108, 0.79, 0.22);
+      surface += waveLayer(q + vec2(-0.7, 2.1), normalize(vec2(0.80, -0.60)), 0.048, 0.174, 0.58, 0.11);
       surface += (valueNoise(q * 0.58 + vec2(uTime * 0.014, -uTime * 0.018)) - 0.5) * 0.040;
       return surface;
     }
@@ -101,9 +104,15 @@ export const waterMaterial = new THREE.ShaderMaterial({
       float q2 = dot(p + vec2(1.8, -0.7), d2) * 13.6 - uTime * 1.56;
       float q3 = dot(p + vec2(-0.4, 2.1), d3) * 21.5 + uTime * 2.18;
       float cell = valueNoise(p * 2.6 + vec2(uTime * 0.20, -uTime * 0.16));
-      slope += d1 * cos(q1) * 0.050;
-      slope += d2 * cos(q2 + cell * 1.45) * 0.033;
-      slope += d3 * cos(q3 - cell * 2.10) * 0.020;
+      // Slow spatial fades keep each glint family patchy instead of letting
+      // its parallel bands stripe the whole pool; means stay near 1.0 so the
+      // total shimmer energy is unchanged.
+      float fade1 = 0.55 + valueNoise(p * 0.30 + vec2(uTime * 0.017, -2.6)) * 0.90;
+      float fade2 = 0.55 + valueNoise(p * 0.26 + vec2(-4.1, uTime * 0.014)) * 0.90;
+      float fade3 = 0.55 + valueNoise(p * 0.34 + vec2(2.2, 5.0 - uTime * 0.019)) * 0.90;
+      slope += d1 * cos(q1 + cell * 1.90) * 0.050 * fade1;
+      slope += d2 * cos(q2 + cell * 1.45) * 0.033 * fade2;
+      slope += d3 * cos(q3 - cell * 2.10) * 0.020 * fade3;
       slope += vec2(
         valueNoise(p * 6.4 + vec2(uTime * 0.54, 2.7)),
         valueNoise(p * 6.1 + vec2(-3.2, -uTime * 0.48))
@@ -118,8 +127,8 @@ export const waterMaterial = new THREE.ShaderMaterial({
         valueNoise(p * 2.70 + vec2(-uTime * 0.18, waveHeight * 4.6))
       ) - 0.5;
       vec2 fine = vec2(
-        sin(p.y * 7.8 + uTime * 0.86 + waveHeight * 20.0),
-        cos(p.x * 6.9 - uTime * 0.72 - waveHeight * 18.0)
+        sin(dot(p, vec2(0.83, 0.56)) * 7.8 + uTime * 0.86 + waveHeight * 20.0),
+        cos(dot(p, vec2(-0.61, 0.79)) * 6.9 - uTime * 0.72 - waveHeight * 18.0)
       );
       return slope * (0.18 + breakup * 0.16 + waveEnergy * 0.032)
         + drift * (0.014 + breakup * 0.064)
@@ -205,7 +214,13 @@ export const waterMaterial = new THREE.ShaderMaterial({
       vec2 awayAxis = cameraXZLength > 0.001 ? -cameraXZ / cameraXZLength : vec2(0.0, 1.0);
       float distanceFade = smoothstep(-5.0, 4.8, dot(p, awayAxis));
       float glancing = smoothstep(0.18, 0.84, fresnel);
-      float lightBand = smoothstep(0.60, 1.0, sin((p.x * 0.42 + p.y * 0.18) + uTime * 0.22) * 0.5 + 0.5);
+      // A stretched drifting noise patch instead of the old straight sine
+      // band, which swept the pool with a perfectly periodic stripe.
+      float lightBand = smoothstep(
+        0.58,
+        0.90,
+        valueNoise(vec2(p.x * 0.085 + uTime * 0.011, p.y * 0.032 - uTime * 0.007))
+      );
       vec3 color = mix(deepBlue, tealBlue, 0.62 + basinDepth * 0.18 + shimmer * 0.10 + distanceFade * 0.08);
       color = mix(color, cyanBlue, 0.19 + directionalLight * 0.08 + glancing * 0.15 + basinDepth * 0.04);
       color = mix(color, deepBlue * 0.84, basinEdge * 0.16);
