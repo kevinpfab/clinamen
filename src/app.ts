@@ -52,6 +52,7 @@ import {
 } from "./water/ripples";
 import { disposeBowlField, updateBowlField } from "./water/bowl-field";
 import { disposeInteractionField, updateInteractionField } from "./water/interaction-field";
+import { disposeWaveState, updateWaveState } from "./water/wave-state";
 import { BasinAudio } from "./audio/basin-audio";
 import { EventBus, type BasinEvents } from "./core/events";
 import { createGpuFrameTimer, type GpuTimingSnapshot } from "./core/gpu-timer";
@@ -107,6 +108,7 @@ type FrameStepTimings = {
   interactionField: number;
   flowImpulses: number;
   waterSim: number;
+  waveState: number;
   render: number;
 };
 
@@ -126,6 +128,7 @@ function createEmptyFrameStepTimings(): FrameStepTimings {
     interactionField: 0,
     flowImpulses: 0,
     waterSim: 0,
+    waveState: 0,
     render: 0,
   };
 }
@@ -188,6 +191,7 @@ function createFrameDiagnostics(
       interactionField: roundFrameTiming(timings.interactionField),
       flowImpulses: roundFrameTiming(timings.flowImpulses),
       waterSim: roundFrameTiming(timings.waterSim),
+      waveState: roundFrameTiming(timings.waveState),
       render: roundFrameTiming(timings.render),
     },
     dpr: renderer.getPixelRatio(),
@@ -366,6 +370,8 @@ function animate(now: DOMHighResTimeStamp) {
   recordStep?.("flowImpulses");
   updateWaterSimulationForFrame(delta);
   recordStep?.("waterSim");
+  updateWaveState();
+  recordStep?.("waveState");
   renderer.render(scene, camera);
   gpuFrameTimer?.endFrame();
   recordStep?.("render");
@@ -471,6 +477,7 @@ export function disposeApp(options: DisposeAppOptions = {}) {
     disposeBowlSharedMaterials();
     disposeInteractionField();
     disposeBowlField();
+    disposeWaveState();
     disposeWaterSimulation();
     disposeFlowJets();
     disposeWaterSurface();

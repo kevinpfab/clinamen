@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { circularPoolSegments, waterSimulationSize } from "../config";
+import { circularPoolSegments } from "../config";
 import { scene } from "../core/stage";
 import { waterUniforms } from "../water/uniforms";
 
@@ -21,9 +21,9 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
     precision highp float;
 
     uniform float uTime;
-    uniform sampler2D uHeightMap;
-    uniform sampler2D uBowlFieldMap;
-    uniform sampler2D uInteractionFieldMap;
+    uniform sampler2D uWaveStateMap;
+    uniform sampler2D uWaveDetailMap;
+    uniform sampler2D uWaveDerivedMap;
     uniform vec4 uSimWorld;
     uniform vec4 uPoolData;
 
@@ -45,13 +45,6 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
       return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
     }
 
-    float basinMask(vec2 p) {
-      float radius = max(uPoolData.z, 0.001);
-      float softness = clamp(uPoolData.w * 0.22, 0.060, 0.180);
-      float d = length(p - uPoolData.xy);
-      return 1.0 - smoothstep(radius - softness, radius, d);
-    }
-
     float basinDepthField(vec2 p) {
       float radius = max(uPoolData.z, 0.001);
       float normalizedRadius = length(p - uPoolData.xy) / radius;
@@ -68,55 +61,24 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
       return (p - uSimWorld.xy) / max(uSimWorld.zw, vec2(0.001));
     }
 
-    vec4 sampledBowlField(vec2 p) {
-      return texture2D(uBowlFieldMap, clamp(simulationUv(p), 0.001, 0.999));
+    vec4 sampledWaveState(vec2 p) {
+      return texture2D(uWaveStateMap, clamp(simulationUv(p), 0.001, 0.999));
     }
 
-    vec4 sampledInteractionField(vec2 p) {
-      return texture2D(uInteractionFieldMap, clamp(simulationUv(p), 0.001, 0.999));
+    vec4 sampledWaveDetail(vec2 p) {
+      return texture2D(uWaveDetailMap, clamp(simulationUv(p), 0.001, 0.999));
     }
 
-    vec3 simulatedStateAtUv(vec2 uv) {
-      vec2 safeUv = clamp(uv, 0.001, 0.999);
-      vec2 p = uSimWorld.xy + safeUv * uSimWorld.zw;
-      return texture2D(uHeightMap, safeUv).rgb * basinMask(p);
-    }
-
-    vec2 simulatedSlope(vec2 p, out float height, out float energy) {
-      vec2 uv = simulationUv(p);
-      vec2 texel = vec2(${1 / waterSimulationSize});
-      vec2 worldTexel = max(uSimWorld.zw * texel, vec2(0.001));
-      vec3 center = simulatedStateAtUv(uv);
-      float leftHeight = simulatedStateAtUv(uv - vec2(texel.x, 0.0)).r;
-      float rightHeight = simulatedStateAtUv(uv + vec2(texel.x, 0.0)).r;
-      float downHeight = simulatedStateAtUv(uv - vec2(0.0, texel.y)).r;
-      float upHeight = simulatedStateAtUv(uv + vec2(0.0, texel.y)).r;
-      height = center.r;
-      energy = center.b;
-      return vec2(leftHeight - rightHeight, downHeight - upHeight) / (worldTexel * 2.0);
+    vec4 sampledWaveDerived(vec2 p) {
+      return texture2D(uWaveDerivedMap, clamp(simulationUv(p), 0.001, 0.999));
     }
 
     vec2 floorWaterWarp(vec2 p, out float waveHeight, out float waveSlope, out float waveEnergy) {
-      float simulatedHeightValue = 0.0;
-      float simulationEnergy = 0.0;
-      vec2 simulationSlopeValue = simulatedSlope(p, simulatedHeightValue, simulationEnergy);
-      vec4 interaction = sampledInteractionField(p);
-      float interactionStep = 0.050;
-      vec2 interactionSlope = vec2(
-        sampledInteractionField(p + vec2(interactionStep, 0.0)).x - sampledInteractionField(p - vec2(interactionStep, 0.0)).x,
-        sampledInteractionField(p + vec2(0.0, interactionStep)).x - sampledInteractionField(p - vec2(0.0, interactionStep)).x
-      ) / max(interactionStep * 2.0, 0.001);
-      vec2 interactionWarp = -interactionSlope * (0.046 + clamp(interaction.z, 0.0, 1.0) * 0.034);
-      vec4 bowl = sampledBowlField(p);
-      waveHeight = simulatedHeightValue * 0.98 + interaction.x * 0.92 + bowl.x * 0.38;
-      waveSlope = abs(simulatedHeightValue) * 1.90
-        + simulationEnergy * 0.18
-        + interaction.y * 0.92
-        + bowl.y * 0.20;
-      waveEnergy = simulationEnergy * 0.78
-        + abs(simulatedHeightValue) * 0.90
-        + interaction.z * 0.92
-        + bowl.y * 0.46;
+      vec4 waveState = sampledWaveState(p);
+      vec2 combinedSlope = sampledWaveDerived(p).xy;
+      waveHeight = waveState.x;
+      waveSlope = waveState.y;
+      waveEnergy = waveState.z;
       float breakup = clamp(abs(waveHeight) * 1.45 + waveSlope * 0.12 + waveEnergy * 0.30, 0.0, 1.0);
       vec2 drift = vec2(
         valueNoise(p * 2.95 + vec2(uTime * 0.22, waveHeight * 5.4)),
@@ -126,14 +88,13 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
         sin(p.y * 7.8 + uTime * 0.86 + waveHeight * 20.0),
         cos(p.x * 6.9 - uTime * 0.72 - waveHeight * 18.0)
       );
-      return simulationSlopeValue * (0.078 + breakup * 0.060 + waveEnergy * 0.018)
-        + interactionWarp * (1.12 + breakup * 0.36)
+      return combinedSlope * (0.15 + breakup * 0.10 + waveEnergy * 0.03)
         + drift * (0.020 + breakup * 0.090)
         + fine * (0.003 + breakup * 0.023);
     }
 
     float floorBowlShadow(vec2 p, vec2 waterWarp, float waveHeight, float waveSlope, float waveEnergy) {
-      float footprint = sampledBowlField(p + waterWarp * 0.62).a;
+      float footprint = sampledWaveDetail(p + waterWarp * 0.62).z;
       float breakup = clamp(abs(waveHeight) * 0.75 + waveSlope * 0.080 + waveEnergy * 0.18, 0.0, 0.62);
       return clamp(footprint * (0.42 + breakup), 0.0, 0.72);
     }

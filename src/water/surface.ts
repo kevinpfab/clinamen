@@ -22,9 +22,9 @@ export const waterMaterial = new THREE.ShaderMaterial({
     precision highp float;
 
     uniform float uTime;
-    uniform sampler2D uHeightMap;
-    uniform sampler2D uBowlFieldMap;
-    uniform sampler2D uInteractionFieldMap;
+    uniform sampler2D uWaveStateMap;
+    uniform sampler2D uWaveDetailMap;
+    uniform sampler2D uWaveDerivedMap;
     uniform vec4 uSimWorld;
     uniform vec4 uPoolData;
     varying vec2 vUv;
@@ -76,23 +76,16 @@ export const waterMaterial = new THREE.ShaderMaterial({
       return (p - uSimWorld.xy) / max(uSimWorld.zw, vec2(0.001));
     }
 
-    vec4 sampledBowlField(vec2 p) {
-      return texture2D(uBowlFieldMap, clamp(simulationUv(p), 0.001, 0.999));
+    vec4 sampledWaveState(vec2 p) {
+      return texture2D(uWaveStateMap, clamp(simulationUv(p), 0.001, 0.999));
     }
 
-    vec4 sampledInteractionField(vec2 p) {
-      return texture2D(uInteractionFieldMap, clamp(simulationUv(p), 0.001, 0.999));
+    vec4 sampledWaveDetail(vec2 p) {
+      return texture2D(uWaveDetailMap, clamp(simulationUv(p), 0.001, 0.999));
     }
 
-    float basinMaskSoftness() {
-      return clamp(uPoolData.w * 0.22, 0.060, 0.180);
-    }
-
-    float basinMask(vec2 p) {
-      float radius = max(uPoolData.z, 0.001);
-      float softness = basinMaskSoftness();
-      float d = length(p - uPoolData.xy);
-      return 1.0 - smoothstep(radius - softness, radius, d);
+    vec4 sampledWaveDerived(vec2 p) {
+      return texture2D(uWaveDerivedMap, clamp(simulationUv(p), 0.001, 0.999));
     }
 
     float basinDepthField(vec2 p) {
@@ -105,26 +98,6 @@ export const waterMaterial = new THREE.ShaderMaterial({
       float radius = max(uPoolData.z, 0.001);
       float normalizedRadius = length(p - uPoolData.xy) / radius;
       return smoothstep(0.74, 1.0, normalizedRadius);
-    }
-
-    vec4 simulatedState(vec2 p) {
-      vec2 uv = simulationUv(p);
-      float mask = basinMask(p);
-      vec4 state = texture2D(uHeightMap, clamp(uv, 0.001, 0.999));
-      return vec4(state.rgb * mask, 1.0);
-    }
-
-    float normalHeightAt(vec2 p) {
-      vec4 bowl = sampledBowlField(p);
-      vec4 interaction = sampledInteractionField(p);
-      vec4 simulation = simulatedState(p);
-      float simulated = simulation.r;
-      float simulationEnergy = simulation.b;
-      return simulated * 0.360
-        + simulationEnergy * 0.007
-        + interaction.x * 0.150
-        + interaction.z * 0.004
-        + bowl.x * 0.056;
     }
 
     vec2 shimmerSlope(vec2 p) {
@@ -147,12 +120,7 @@ export const waterMaterial = new THREE.ShaderMaterial({
     }
 
     vec2 surfaceSlope(vec2 p) {
-      float e = 0.050;
-      float h = normalHeightAt(p);
-      float hx = normalHeightAt(p + vec2(e, 0.0));
-      float hz = normalHeightAt(p + vec2(0.0, e));
-      vec2 slope = vec2((h - hx) / e * 1.62, (h - hz) / e * 1.62);
-      return slope + shimmerSlope(p);
+      return sampledWaveDerived(p).xy + shimmerSlope(p);
     }
 
     vec3 surfaceNormal(vec2 p) {
@@ -177,7 +145,7 @@ export const waterMaterial = new THREE.ShaderMaterial({
 
     float underwaterShadowField(vec2 p, vec2 slope, float waveHeight, float waveSlope, float waveEnergy) {
       vec2 warp = waterWarp(p, slope, waveHeight, waveSlope, waveEnergy);
-      float footprint = sampledBowlField(p + warp * 0.42).a;
+      float footprint = sampledWaveDetail(p + warp * 0.42).z;
       float breakup = clamp(abs(waveHeight) * 0.65 + waveSlope * 0.070 + waveEnergy * 0.16, 0.0, 0.50);
       return clamp(footprint * (0.18 + breakup), 0.0, 0.34);
     }
@@ -198,26 +166,19 @@ export const waterMaterial = new THREE.ShaderMaterial({
 
     void main() {
       vec2 p = vWorldPosition.xz;
-      vec4 bowlWake = sampledBowlField(p);
-      float bowlOcclusion = clamp(bowlWake.a, 0.0, 1.0);
+      vec4 waveState = sampledWaveState(p);
+      vec4 waveDetail = sampledWaveDetail(p);
+      float bowlOcclusion = clamp(waveDetail.z, 0.0, 1.0);
       float surface = baseSurface(p);
-      vec4 interaction = sampledInteractionField(p);
-      vec4 simulation = simulatedState(p);
-      float simulated = simulation.r;
-      float simulationEnergy = simulation.b;
+      float simulationEnergy = waveDetail.w;
       float basinDepth = basinDepthField(p);
       float basinEdge = basinEdgeField(p);
-      float waveHeight = simulated * 0.98 + interaction.x + bowlWake.x * 0.44;
-      float waveSlope = abs(simulated) * 1.90
-        + simulationEnergy * 0.18
-        + interaction.y
-        + bowlWake.y * 0.28;
-      float waveEnergy = simulationEnergy * 0.78
-        + abs(simulated) * 0.90
-        + interaction.z
-        + bowlWake.y * 0.72;
-      float meniscus = clamp(bowlWake.z * (0.048 + waveEnergy * 0.006), 0.0, 0.18);
-      float contactAccent = interaction.w + meniscus;
+      float waveHeight = waveState.x;
+      float waveSlope = waveState.y;
+      float waveEnergy = waveState.z;
+      float contactBase = waveState.w;
+      float meniscus = clamp(waveDetail.y * (0.048 + waveEnergy * 0.006), 0.0, 0.18);
+      float contactAccent = contactBase + meniscus;
       vec2 slope = surfaceSlope(p);
       float slopeAmount = length(slope);
       vec3 normal = normalize(vec3(slope.x, 1.0, slope.y));
@@ -237,9 +198,9 @@ export const waterMaterial = new THREE.ShaderMaterial({
       float negativeTrough = max(-waveHeight, 0.0);
       float whiteCrest = smoothstep(0.034, 0.180, positiveCrest) * clamp(positiveCrest * 0.92, 0.0, 0.20);
       whiteCrest += smoothstep(0.120, 0.640, waveSlope) * clamp(waveEnergy * 0.046, 0.0, 0.11);
-      whiteCrest += smoothstep(0.24, 1.00, simulationEnergy + interaction.w * 0.20) * clamp(slopeAmount * 0.020, 0.0, 0.055);
+      whiteCrest += smoothstep(0.24, 1.00, simulationEnergy + contactBase * 0.20) * clamp(slopeAmount * 0.020, 0.0, 0.055);
       whiteCrest += clamp(contactAccent * 0.21, 0.0, 0.12);
-      whiteCrest += clamp(interaction.w * 0.010 + interaction.z * 0.045, 0.0, 0.10);
+      whiteCrest += clamp(contactBase * 0.010 + waveEnergy * 0.030, 0.0, 0.10);
       float shimmer = surface * 0.22 + waveHeight * 0.48;
       float distanceFade = smoothstep(-5.0, 4.8, p.y);
       float glancing = smoothstep(0.18, 0.84, fresnel);
@@ -256,8 +217,8 @@ export const waterMaterial = new THREE.ShaderMaterial({
         + causticLight * (0.82 + basinDepth * 0.52)
         + slopeAmount * 0.016
       );
-      color += highlight * clamp(interaction.w * 0.014, 0.0, 0.10);
-      color += vec3(0.76, 1.0, 0.96) * clamp(interaction.z * 0.038, 0.0, 0.14);
+      color += highlight * clamp(contactBase * 0.014, 0.0, 0.10);
+      color += vec3(0.76, 1.0, 0.96) * clamp(waveEnergy * 0.026, 0.0, 0.14);
       color += vec3(0.72, 0.98, 0.94) * meniscus * 0.25;
       color -= deepBlue * clamp(negativeTrough * 0.24, 0.0, 0.20);
       color -= deepBlue * basinEdge * clamp(0.040 + waveEnergy * 0.018, 0.0, 0.12);

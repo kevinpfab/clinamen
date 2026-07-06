@@ -15,6 +15,9 @@ export type WaterUniforms = {
   uHeightMap: { value: THREE.Texture | null };
   uBowlFieldMap: { value: THREE.Texture | null };
   uInteractionFieldMap: { value: THREE.Texture | null };
+  uWaveStateMap: { value: THREE.Texture | null };
+  uWaveDetailMap: { value: THREE.Texture | null };
+  uWaveDerivedMap: { value: THREE.Texture | null };
   uSimWorld: { value: THREE.Vector4 };
   uPoolData: { value: THREE.Vector4 };
   uWaveSpeed: { value: number };
