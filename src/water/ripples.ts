@@ -2,7 +2,6 @@ import * as THREE from "three";
 import {
   maxDragWorldSpeed,
   maxRipples,
-  maxWaterBowls,
   velocityWorldScale,
   waterWaveSpeed,
 } from "../config";
@@ -16,7 +15,6 @@ import type { Ripple } from "./types";
 // bowl drags. This module owns the ripple pool, feeds the simulation impulses,
 // and publishes ripple + bowl state into the shared water uniforms each frame.
 const ripples: Ripple[] = [];
-let previousVisibleBowlCount = 0;
 
 export function addCollisionRipple(
   x: number,
@@ -276,27 +274,3 @@ export function updateRipples(delta: number) {
   }
 }
 
-export function updateWaterBowlUniforms(bowls: BowlBody[]) {
-  const visibleBowlCount = Math.min(bowls.length, maxWaterBowls);
-  waterUniforms.uBowlCount.value = visibleBowlCount;
-
-  for (let i = 0; i < visibleBowlCount; i += 1) {
-    const bowl = bowls[i];
-
-    const wakeStrength = THREE.MathUtils.clamp(bowl.velocity.length() * 8.5, 0, 1);
-    waterUniforms.uBowlData.value[i].set(
-      bowl.mesh.position.x,
-      bowl.mesh.position.z,
-      bowl.radius,
-      wakeStrength,
-    );
-    waterUniforms.uBowlVelocity.value[i].set(bowl.velocity.x, bowl.velocity.y, 0, 0);
-  }
-
-  for (let i = visibleBowlCount; i < previousVisibleBowlCount; i += 1) {
-    waterUniforms.uBowlData.value[i].set(0, 0, 0, 0);
-    waterUniforms.uBowlVelocity.value[i].set(0, 0, 0, 0);
-  }
-
-  previousVisibleBowlCount = visibleBowlCount;
-}

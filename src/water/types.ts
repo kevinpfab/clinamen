@@ -24,9 +24,6 @@ export type WaterUniforms = {
   uRippleCenters: { value: THREE.Vector4[] };
   uRippleData: { value: THREE.Vector4[] };
   uRippleCount: { value: number };
-  uBowlData: { value: THREE.Vector4[] };
-  uBowlVelocity: { value: THREE.Vector4[] };
-  uBowlCount: { value: number };
   uFlowJetData: { value: THREE.Vector4[] };
   uFlowJetParams: { value: THREE.Vector4[] };
   uFlowJetCount: { value: number };

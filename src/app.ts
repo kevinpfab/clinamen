@@ -45,11 +45,7 @@ import {
 } from "./ui/fps-counter";
 import { createLighting } from "./core/lighting";
 import { disposeBowlSharedMaterials } from "./bowls/materials";
-import {
-  addCollisionRipple,
-  updateRipples,
-  updateWaterBowlUniforms,
-} from "./water/ripples";
+import { addCollisionRipple, updateRipples } from "./water/ripples";
 import { disposeBowlField, updateBowlField } from "./water/bowl-field";
 import { disposeInteractionField, updateInteractionField } from "./water/interaction-field";
 import { disposeWaveState, updateWaveState } from "./water/wave-state";
@@ -103,7 +99,6 @@ type FrameStepTimings = {
   ripples: number;
   resonance: number;
   instances: number;
-  uniforms: number;
   bowlField: number;
   interactionField: number;
   flowImpulses: number;
@@ -123,7 +118,6 @@ function createEmptyFrameStepTimings(): FrameStepTimings {
     ripples: 0,
     resonance: 0,
     instances: 0,
-    uniforms: 0,
     bowlField: 0,
     interactionField: 0,
     flowImpulses: 0,
@@ -186,7 +180,6 @@ function createFrameDiagnostics(
       ripples: roundFrameTiming(timings.ripples),
       resonance: roundFrameTiming(timings.resonance),
       instances: roundFrameTiming(timings.instances),
-      uniforms: roundFrameTiming(timings.uniforms),
       bowlField: roundFrameTiming(timings.bowlField),
       interactionField: roundFrameTiming(timings.interactionField),
       flowImpulses: roundFrameTiming(timings.flowImpulses),
@@ -359,10 +352,8 @@ function animate(now: DOMHighResTimeStamp) {
   recordStep?.("resonance");
   bowlSystem.updateInstances();
   recordStep?.("instances");
-  updateWaterBowlUniforms(bowlSystem.bowls);
-  recordStep?.("uniforms");
   gpuFrameTimer?.beginFrame();
-  updateBowlField();
+  updateBowlField(bowlSystem.bowls);
   recordStep?.("bowlField");
   updateInteractionField();
   recordStep?.("interactionField");

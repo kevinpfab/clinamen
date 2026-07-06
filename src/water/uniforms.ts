@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { maxFlowJets, maxRipples, maxWaterBowls, waterWaveSpeed, world } from "../config";
+import { maxFlowJets, maxRipples, waterWaveSpeed, world } from "../config";
 import { getWaterSurfaceRadius } from "../core/world";
 import type { WaterUniforms } from "./types";
 
@@ -25,13 +25,6 @@ export const waterUniforms = THREE.UniformsUtils.merge([
       value: Array.from({ length: maxRipples }, () => new THREE.Vector4(0, 0, 0, 0)),
     },
     uRippleCount: { value: 0 },
-    uBowlData: {
-      value: Array.from({ length: maxWaterBowls }, () => new THREE.Vector4(0, 0, 0, 0)),
-    },
-    uBowlVelocity: {
-      value: Array.from({ length: maxWaterBowls }, () => new THREE.Vector4(0, 0, 0, 0)),
-    },
-    uBowlCount: { value: 0 },
     uFlowJetData: {
       value: Array.from({ length: maxFlowJets }, () => new THREE.Vector4(0, 0, 1, 0)),
     },

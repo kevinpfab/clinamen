@@ -2,7 +2,13 @@ import * as THREE from "three";
 import { bowlFieldTextureSize, maxWaterBowls } from "../config";
 import { renderer } from "../core/stage";
 import { waterUniforms } from "./uniforms";
+import type { BowlBody } from "../bowls/types";
 
+// The bowl influence field (wake height, wake energy, meniscus, footprint).
+// Each bowl is splatted as one instanced trapezoid quad covering its rim,
+// bow wave, and wake trail, blended additively into the target. This keeps
+// the cost proportional to the area bowls actually influence instead of
+// evaluating every bowl at every texel (100 bowls x 384^2 texels).
 const bowlFieldOptions = {
   type: THREE.HalfFloatType,
   format: THREE.RGBAFormat,
@@ -21,34 +27,81 @@ export const bowlFieldTarget = new THREE.WebGLRenderTarget(
 bowlFieldTarget.texture.name = "Basin bowl influence field";
 waterUniforms.uBowlFieldMap.value = bowlFieldTarget.texture;
 
-const bowlFieldUniforms: Record<string, THREE.IUniform> = {
-  uSimWorld: waterUniforms.uSimWorld,
-  uPoolData: waterUniforms.uPoolData,
-  uBowlData: waterUniforms.uBowlData,
-  uBowlVelocity: waterUniforms.uBowlVelocity,
-  uBowlCount: waterUniforms.uBowlCount,
-};
+function createBowlSplatGeometry() {
+  const geometry = new THREE.InstancedBufferGeometry();
+  const quad = new THREE.PlaneGeometry(2, 2);
+  geometry.setIndex(quad.getIndex());
+  geometry.setAttribute("position", quad.getAttribute("position"));
+  geometry.instanceCount = 0;
+
+  const bowlData = new Float32Array(maxWaterBowls * 4);
+  const bowlVelocity = new Float32Array(maxWaterBowls * 2);
+  const bowlDataAttribute = new THREE.InstancedBufferAttribute(bowlData, 4);
+  const bowlVelocityAttribute = new THREE.InstancedBufferAttribute(bowlVelocity, 2);
+  bowlDataAttribute.setUsage(THREE.DynamicDrawUsage);
+  bowlVelocityAttribute.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("aBowlData", bowlDataAttribute);
+  geometry.setAttribute("aBowlVelocity", bowlVelocityAttribute);
+  return { geometry, bowlDataAttribute, bowlVelocityAttribute };
+}
+
+const {
+  geometry: bowlSplatGeometry,
+  bowlDataAttribute,
+  bowlVelocityAttribute,
+} = createBowlSplatGeometry();
 
 export const bowlFieldMaterial = new THREE.ShaderMaterial({
-  uniforms: bowlFieldUniforms,
+  uniforms: {
+    uSimWorld: waterUniforms.uSimWorld,
+    uPoolData: waterUniforms.uPoolData,
+  },
   vertexShader: `
-    varying vec2 vUv;
+    attribute vec4 aBowlData;
+    attribute vec2 aBowlVelocity;
+
+    uniform vec4 uSimWorld;
+
+    varying vec2 vWorld;
+    varying vec4 vBowlData;
+    varying vec2 vDirection;
 
     void main() {
-      vUv = uv;
-      gl_Position = vec4(position.xy, 0.0, 1.0);
+      vec2 center = aBowlData.xy;
+      float radius = max(aBowlData.z, 0.001);
+      float speed = length(aBowlVelocity);
+      vec2 direction = speed > 0.0001 ? aBowlVelocity / speed : vec2(1.0, 0.0);
+      vec2 tangent = vec2(-direction.y, direction.x);
+
+      // Trapezoid extents sized to the influence terms in the fragment
+      // shader: rim + bow crest ahead, the exponential wake trail behind,
+      // and a lateral flare that follows the V-wake opening angle.
+      float aheadExtent = radius * 1.6 + 0.30;
+      float behindExtent = (radius * 3.15 + 1.15) * 2.2;
+      float frontHalfWidth = radius * 1.7 + 0.42;
+      float backHalfWidth = frontHalfWidth + behindExtent * 0.75;
+
+      float t = position.y * 0.5 + 0.5;
+      float along = mix(-behindExtent, aheadExtent, t);
+      float halfWidth = mix(backHalfWidth, frontHalfWidth, t);
+      vec2 world = center + direction * along + tangent * (position.x * halfWidth);
+
+      vWorld = world;
+      vBowlData = aBowlData;
+      vDirection = direction;
+
+      vec2 simUv = (world - uSimWorld.xy) / max(uSimWorld.zw, vec2(0.001));
+      gl_Position = vec4(simUv * 2.0 - 1.0, 0.0, 1.0);
     }
   `,
   fragmentShader: `
     precision highp float;
 
-    uniform vec4 uSimWorld;
     uniform vec4 uPoolData;
-    uniform vec4 uBowlData[${maxWaterBowls}];
-    uniform vec4 uBowlVelocity[${maxWaterBowls}];
-    uniform int uBowlCount;
 
-    varying vec2 vUv;
+    varying vec2 vWorld;
+    varying vec4 vBowlData;
+    varying vec2 vDirection;
 
     float gaussianBand(float value, float center, float width) {
       return exp(-pow((value - center) / max(width, 0.001), 2.0));
@@ -62,94 +115,70 @@ export const bowlFieldMaterial = new THREE.ShaderMaterial({
     }
 
     void main() {
-      vec2 p = uSimWorld.xy + vUv * uSimWorld.zw;
+      vec2 p = vWorld;
       float mask = basinMask(p);
-      if (mask <= 0.001) {
-        gl_FragColor = vec4(0.0);
-        return;
-      }
+      vec2 center = vBowlData.xy;
+      float radius = vBowlData.z;
+      float wakeStrength = vBowlData.w;
+      vec2 direction = vDirection;
+      vec2 tangent = vec2(-direction.y, direction.x);
+      vec2 offset = p - center;
+      float d = length(offset);
+      float rimWidth = 0.036 + radius * 0.034;
+      float rim = exp(-pow((d - radius) / rimWidth, 2.0));
+      float ahead = dot(offset, direction);
+      float behind = -ahead;
+      float activeBehind = max(behind, 0.0);
+      float across = dot(offset, tangent);
+      float motion = smoothstep(0.10, 0.86, wakeStrength);
+      float flow = wakeStrength * (0.46 + motion * 0.54);
 
-      float wakeHeight = 0.0;
-      float wakeEnergy = 0.0;
-      float meniscus = 0.0;
-      float footprint = 0.0;
+      float bowCrest = gaussianBand(ahead, radius * 0.82, 0.058 + radius * 0.070);
+      bowCrest *= exp(-pow(across / (radius * 0.96 + 0.12), 2.0)) * flow;
 
-      for (int i = 0; i < ${maxWaterBowls}; i++) {
-        if (i >= uBowlCount) {
-          break;
-        }
+      float bowTrough = gaussianBand(ahead, radius * 0.20, radius * 0.48 + 0.10);
+      bowTrough *= exp(-pow(across / (radius * 1.12 + 0.14), 2.0)) * flow;
 
-        vec4 data = uBowlData[i];
-        vec2 center = data.xy;
-        float radius = data.z;
-        float wakeStrength = data.w;
-        if (radius <= 0.0) {
-          continue;
-        }
+      float sideShoulder = gaussianBand(abs(across), radius * (0.78 + motion * 0.10), 0.056 + radius * 0.052);
+      sideShoulder *= gaussianBand(ahead, radius * 0.02, radius * 0.82 + 0.15) * flow;
 
-        vec2 velocity = uBowlVelocity[i].xy;
-        float speed = length(velocity);
-        vec2 direction = speed > 0.0001 ? velocity / speed : vec2(1.0, 0.0);
-        vec2 backDirection = -direction;
-        vec2 tangent = vec2(-direction.y, direction.x);
-        vec2 offset = p - center;
-        float d = length(offset);
-        float rimWidth = 0.036 + radius * 0.034;
-        float rim = exp(-pow((d - radius) / rimWidth, 2.0));
-        float ahead = dot(offset, direction);
-        float behind = dot(offset, backDirection);
-        float activeBehind = max(behind, 0.0);
-        float across = dot(offset, tangent);
-        float motion = smoothstep(0.10, 0.86, wakeStrength);
-        float flow = wakeStrength * (0.46 + motion * 0.54);
+      float sternTrough = gaussianBand(behind, radius * 0.58, radius * 0.52 + 0.12);
+      sternTrough *= exp(-pow(across / (radius * 0.62 + 0.16), 2.0)) * flow;
 
-        float bowCrest = gaussianBand(ahead, radius * 0.82, 0.058 + radius * 0.070);
-        bowCrest *= exp(-pow(across / (radius * 0.96 + 0.12), 2.0)) * flow;
+      float trail = smoothstep(0.02, radius * 0.42 + 0.16, behind);
+      trail *= exp(-activeBehind / (radius * 3.15 + 1.15)) * flow;
 
-        float bowTrough = gaussianBand(ahead, radius * 0.20, radius * 0.48 + 0.10);
-        bowTrough *= exp(-pow(across / (radius * 1.12 + 0.14), 2.0)) * flow;
+      float vLine = abs(across) - activeBehind * (0.38 + motion * 0.13);
+      float vWake = exp(-pow(vLine / (0.064 + radius * 0.042 + activeBehind * 0.016), 2.0));
+      vWake *= trail;
 
-        float sideShoulder = gaussianBand(abs(across), radius * (0.78 + motion * 0.10), 0.056 + radius * 0.052);
-        sideShoulder *= gaussianBand(ahead, radius * 0.02, radius * 0.82 + 0.15) * flow;
+      float shearLine = abs(across) - activeBehind * (0.54 + motion * 0.10);
+      float shearWake = exp(-pow(shearLine / (0.095 + radius * 0.052 + activeBehind * 0.018), 2.0));
+      shearWake *= trail * motion;
 
-        float sternTrough = gaussianBand(behind, radius * 0.58, radius * 0.52 + 0.12);
-        sternTrough *= exp(-pow(across / (radius * 0.62 + 0.16), 2.0)) * flow;
+      float transverseWake = exp(-pow(across / (radius * 0.44 + activeBehind * 0.18 + 0.16), 2.0));
+      transverseWake *= trail * motion;
 
-        float trail = smoothstep(0.02, radius * 0.42 + 0.16, behind);
-        trail *= exp(-activeBehind / (radius * 3.15 + 1.15)) * flow;
+      float wakeWave = vWake * (0.018 + motion * 0.008)
+        + shearWake * (0.010 + motion * 0.006)
+        + transverseWake * (0.012 + motion * 0.006);
 
-        float vLine = abs(across) - activeBehind * (0.38 + motion * 0.13);
-        float vWake = exp(-pow(vLine / (0.064 + radius * 0.042 + activeBehind * 0.016), 2.0));
-        vWake *= trail;
-
-        float shearLine = abs(across) - activeBehind * (0.54 + motion * 0.10);
-        float shearWake = exp(-pow(shearLine / (0.095 + radius * 0.052 + activeBehind * 0.018), 2.0));
-        shearWake *= trail * motion;
-
-        float transverseWake = exp(-pow(across / (radius * 0.44 + activeBehind * 0.18 + 0.16), 2.0));
-        transverseWake *= trail * motion;
-
-        float wakeWave = vWake * (0.018 + motion * 0.008)
-          + shearWake * (0.010 + motion * 0.006)
-          + transverseWake * (0.012 + motion * 0.006);
-
-        wakeHeight += rim * 0.012
-          + bowCrest * 0.030
-          - bowTrough * 0.014
-          + sideShoulder * 0.012
-          - sternTrough * 0.020
-          + wakeWave;
-        wakeEnergy += rim * 0.105
-          + bowCrest * 0.180
-          + bowTrough * 0.085
-          + sideShoulder * 0.105
-          + sternTrough * 0.130
-          + vWake * 0.180
-          + shearWake * 0.150
-          + transverseWake * 0.110;
-        meniscus += rim * (0.56 + wakeStrength * 0.30) + bowCrest * 0.16 + sideShoulder * 0.08;
-        footprint = max(footprint, 1.0 - smoothstep(radius * 0.72, radius * 0.98, d));
-      }
+      float wakeHeight = rim * 0.012
+        + bowCrest * 0.030
+        - bowTrough * 0.014
+        + sideShoulder * 0.012
+        - sternTrough * 0.020
+        + wakeWave;
+      float wakeEnergy = rim * 0.105
+        + bowCrest * 0.180
+        + bowTrough * 0.085
+        + sideShoulder * 0.105
+        + sternTrough * 0.130
+        + vWake * 0.180
+        + shearWake * 0.150
+        + transverseWake * 0.110;
+      float meniscus = rim * (0.56 + wakeStrength * 0.30) + bowCrest * 0.16 + sideShoulder * 0.08;
+      float footprint = 1.0 - smoothstep(radius * 0.72, radius * 0.98, d);
 
       gl_FragColor = vec4(
         clamp(wakeHeight * mask, -1.0, 1.0),
@@ -159,25 +188,54 @@ export const bowlFieldMaterial = new THREE.ShaderMaterial({
       );
     }
   `,
+  blending: THREE.CustomBlending,
+  blendEquation: THREE.AddEquation,
+  blendSrc: THREE.OneFactor,
+  blendDst: THREE.OneFactor,
+  blendSrcAlpha: THREE.OneFactor,
+  blendDstAlpha: THREE.OneFactor,
+  transparent: true,
+  depthTest: false,
+  depthWrite: false,
 });
 
 const bowlFieldScene = new THREE.Scene();
 const bowlFieldCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-export const bowlFieldQuad = new THREE.Mesh(
-  new THREE.PlaneGeometry(2, 2),
-  bowlFieldMaterial,
-);
-bowlFieldScene.add(bowlFieldQuad);
+export const bowlFieldMesh = new THREE.Mesh(bowlSplatGeometry, bowlFieldMaterial);
+bowlFieldMesh.frustumCulled = false;
+bowlFieldScene.add(bowlFieldMesh);
 
-export function updateBowlField() {
+const previousClearColor = new THREE.Color();
+
+export function updateBowlField(bowls: BowlBody[]) {
+  const visibleBowlCount = Math.min(bowls.length, maxWaterBowls);
+  for (let i = 0; i < visibleBowlCount; i += 1) {
+    const bowl = bowls[i];
+    const wakeStrength = THREE.MathUtils.clamp(bowl.velocity.length() * 8.5, 0, 1);
+    bowlDataAttribute.array[i * 4] = bowl.mesh.position.x;
+    bowlDataAttribute.array[i * 4 + 1] = bowl.mesh.position.z;
+    bowlDataAttribute.array[i * 4 + 2] = bowl.radius;
+    bowlDataAttribute.array[i * 4 + 3] = wakeStrength;
+    bowlVelocityAttribute.array[i * 2] = bowl.velocity.x;
+    bowlVelocityAttribute.array[i * 2 + 1] = bowl.velocity.y;
+  }
+  bowlDataAttribute.needsUpdate = true;
+  bowlVelocityAttribute.needsUpdate = true;
+  bowlSplatGeometry.instanceCount = visibleBowlCount;
+
+  renderer.getClearColor(previousClearColor);
+  const previousClearAlpha = renderer.getClearAlpha();
+  renderer.setClearColor(0x000000, 0);
   renderer.setRenderTarget(bowlFieldTarget);
+  renderer.clear(true, false, false);
   renderer.render(bowlFieldScene, bowlFieldCamera);
   renderer.setRenderTarget(null);
+  renderer.setClearColor(previousClearColor, previousClearAlpha);
   waterUniforms.uBowlFieldMap.value = bowlFieldTarget.texture;
 }
 
 export function disposeBowlField() {
   bowlFieldTarget.dispose();
   bowlFieldMaterial.dispose();
-  bowlFieldQuad.geometry.dispose();
+  bowlSplatGeometry.dispose();
 }
