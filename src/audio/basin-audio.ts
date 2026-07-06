@@ -37,6 +37,10 @@ export class BasinAudio {
     this.delayGain.connect(lowpass);
   }
 
+  get isRunning() {
+    return this.context.state === "running";
+  }
+
   async resume() {
     if (this.context.state !== "running") {
       await this.context.resume();

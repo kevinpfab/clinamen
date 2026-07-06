@@ -422,8 +422,17 @@ async function startAudio() {
   }
 }
 
-function handleGlobalAudioPointerDown() {
+// iOS Safari often refuses to unlock audio from pointerdown (touchstart) and
+// suspends the context when the tab loses focus or the phone locks, so every
+// gesture keeps nudging the context until it is actually running — click
+// fires on touchend, the gesture class WebKit reliably honors.
+function handleAudioUnlockGesture() {
+  if (audioEngine?.isRunning) {
+    return;
+  }
+
   if (audioEngine) {
+    void audioEngine.resume().catch(() => {});
     return;
   }
 
@@ -437,6 +446,9 @@ function handleVisibilityChange() {
     stopAnimationLoop();
   } else {
     startAnimationLoop();
+    // iOS leaves the context interrupted after a lock/app switch; resuming on
+    // return is permitted without a fresh gesture once audio ran before.
+    void audioEngine?.resume().catch(() => {});
   }
 }
 
@@ -452,7 +464,8 @@ export function disposeApp(options: DisposeAppOptions = {}) {
   intro = null;
   pointerController?.dispose();
   pointerController = null;
-  window.removeEventListener("pointerdown", handleGlobalAudioPointerDown);
+  window.removeEventListener("pointerdown", handleAudioUnlockGesture);
+  window.removeEventListener("click", handleAudioUnlockGesture);
   window.removeEventListener("resize", updateWorldSize);
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   window.removeEventListener("beforeunload", handleBeforeUnload);
@@ -565,7 +578,8 @@ if (import.meta.env.DEV) {
   });
 }
 
-window.addEventListener("pointerdown", handleGlobalAudioPointerDown, { once: true });
+window.addEventListener("pointerdown", handleAudioUnlockGesture);
+window.addEventListener("click", handleAudioUnlockGesture);
 window.addEventListener("resize", updateWorldSize);
 document.addEventListener("visibilitychange", handleVisibilityChange);
 window.addEventListener("beforeunload", handleBeforeUnload);
