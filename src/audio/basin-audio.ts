@@ -86,7 +86,7 @@ export class BasinAudio {
     }, Math.ceil((fadeTime * 4 + 0.04) * 1000));
   }
 
-  play(sizeRatio: number, strength: number) {
+  play(sizeRatio: number, strength: number, sustain = 1) {
     if (this.context.state !== "running") {
       return;
     }
@@ -109,7 +109,7 @@ export class BasinAudio {
       0.12,
     );
     const attack = 0.0024;
-    const duration = 3.10 + (1 - sizeRatio) * 1.35;
+    const duration = (3.10 + (1 - sizeRatio) * 1.35) * THREE.MathUtils.clamp(sustain, 0.25, 3);
     const microtonalShimmer = Math.pow(2, 1 / 19);
 
     const voice = this.context.createGain();

@@ -58,7 +58,18 @@ const emergenceJitter = 0.55;
 const emergenceRiseDuration = 2.4;
 
 const idleHintDelayMs = 8000;
+// After a partial ring the hint returns sooner to explain what remains.
+const midRitualHintDelayMs = 4000;
 const strikeShudderDuration = 1.15;
+
+// The piece begins after three chimes — a deliberate ritual, and each ring
+// swells a little louder than the last.
+const strikesToBegin = 3;
+const strikeToneStrengths = [0.55, 0.66, 0.8];
+const strikeRippleStrengths = [0.34, 0.42, 0.52];
+// The completing chime rings out well past the first two.
+const finalStrikeSustain = 1.75;
+const strikeMinimumGap = 0.18;
 
 const pointerNdc = new THREE.Vector2();
 const pointerWorld = new THREE.Vector3();
@@ -124,7 +135,7 @@ function createOverlay() {
 
   const hint = document.createElement("p");
   hint.className = "intro__hint";
-  hint.textContent = "touch the bowl";
+  hint.textContent = "touch the bowl three times to begin";
 
   word.append(title, reflection, hint);
 
@@ -275,6 +286,8 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
 
   let time = 0;
   let titleAzimuth = 0;
+  let strikeCount = 0;
+  let lastStrikeAt: number | null = null;
   let struckAt: number | null = null;
   let strikeAzimuth = 0;
   let strikeDirection = new THREE.Vector2(1, 0);
@@ -284,7 +297,7 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
   let handOffAt = 0;
   let finished = false;
 
-  const idleTimer = window.setTimeout(() => {
+  let idleTimer = window.setTimeout(() => {
     overlay.classList.add("is-idle");
   }, idleHintDelayMs);
 
@@ -310,31 +323,50 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
     if (struckAt !== null || finished) {
       return;
     }
+    if (lastStrikeAt !== null && time - lastStrikeAt < strikeMinimumGap) {
+      return;
+    }
 
-    struckAt = time;
-    strikeAzimuth = titleAzimuth;
-    strikeDirection = direction;
-    window.clearTimeout(idleTimer);
-    overlay.classList.remove("is-idle");
-    overlay.classList.add("is-leaving");
-    window.setTimeout(() => {
-      overlay.remove();
-    }, 1700);
-
-    triggerBowlResonance(hero, 1.05, direction);
+    strikeCount += 1;
+    lastStrikeAt = time;
+    const ring = Math.min(strikeCount, strikesToBegin) - 1;
+    triggerBowlResonance(hero, 0.85 + ring * 0.12, direction);
     deps.bus.emit("ripple", {
       x: hero.mesh.position.x,
       z: hero.mesh.position.z,
-      strength: 0.52,
+      strength: strikeRippleStrengths[ring],
       direction,
     });
     void deps.startAudio()
       .then(() => {
-        deps.bus.emit("tone", { sizeRatio: hero.toneRatio, strength: 0.8 });
+        deps.bus.emit("tone", {
+          sizeRatio: hero.toneRatio,
+          strength: strikeToneStrengths[ring],
+          sustain: ring === strikesToBegin - 1 ? finalStrikeSustain : 1,
+        });
       })
       .catch((error) => {
         console.error("Microtonal Basin could not start audio.", error);
       });
+
+    window.clearTimeout(idleTimer);
+    overlay.classList.remove("is-idle");
+
+    if (strikeCount < strikesToBegin) {
+      idleTimer = window.setTimeout(() => {
+        overlay.classList.add("is-idle");
+      }, midRitualHintDelayMs);
+      return;
+    }
+
+    // Third chime: the ritual is complete and the reveal begins.
+    struckAt = time;
+    strikeAzimuth = titleAzimuth;
+    strikeDirection = direction;
+    overlay.classList.add("is-leaving");
+    window.setTimeout(() => {
+      overlay.remove();
+    }, 1700);
 
     if (reducedMotion) {
       for (const entry of emergenceEntries) {
@@ -463,6 +495,16 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
 
       time += delta;
 
+      // Every chime shivers the bowl like rung porcelain: fast, tiny, decaying.
+      if (!reducedMotion && lastStrikeAt !== null) {
+        const sinceHit = time - lastStrikeAt;
+        if (sinceHit < strikeShudderDuration) {
+          const decay = Math.exp(-sinceHit * 3.4) * 0.05;
+          hero.visual.rotation.z = Math.sin(sinceHit * 44) * decay;
+          hero.visual.rotation.x = Math.sin(sinceHit * 37 + 1.3) * decay * 0.64;
+        }
+      }
+
       if (struckAt === null) {
         // Title: hold the close-up with a barely-there breath of motion.
         titleAzimuth = Math.sin(time * 0.16) * titleAzimuthDrift;
@@ -472,13 +514,6 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
       }
 
       const sinceStrike = time - struckAt;
-
-      if (!reducedMotion && sinceStrike < strikeShudderDuration) {
-        // The struck bowl shivers like rung porcelain: fast, tiny, decaying.
-        const decay = Math.exp(-sinceStrike * 3.4) * 0.05;
-        hero.visual.rotation.z = Math.sin(sinceStrike * 44) * decay;
-        hero.visual.rotation.x = Math.sin(sinceStrike * 37 + 1.3) * decay * 0.64;
-      }
 
       if (!summonsEmitted && sinceStrike > 0.55) {
         // A second, softer ring: the wave that summons the rest of the bowls.

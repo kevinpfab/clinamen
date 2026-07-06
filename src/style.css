@@ -43,6 +43,37 @@ canvas.is-dragging {
   cursor: grabbing;
 }
 
+/* A standing vignette: the darkness of the title screen never fully leaves
+   the frame. Blue-black to match the pool, centered slightly above middle
+   where the basin sits, above the canvas and below all UI. */
+body::after {
+  content: "";
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  /* Default (farthest-corner) sizing puts the last stop exactly at the
+     screen corners so they actually reach full strength. */
+  background: radial-gradient(
+    ellipse at 50% 42%,
+    transparent 26%,
+    rgb(1 8 13 / 48%) 64%,
+    rgb(1 8 13 / 88%) 100%
+  );
+}
+
+/* Small screens sit closer to the pool edge, so ease the vignette off. */
+@media (max-width: 520px) {
+  body::after {
+    background: radial-gradient(
+      ellipse at 50% 42%,
+      transparent 33%,
+      rgb(1 8 13 / 38%) 68%,
+      rgb(1 8 13 / 74%) 100%
+    );
+  }
+}
+
 .basin-attribution {
   position: fixed;
   z-index: 2;
@@ -121,7 +152,7 @@ body.is-intro .basin-attribution {
 .intro__hint {
   margin: 30px 0 0;
   color: rgb(213 226 231 / 55%);
-  font: 500 11px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  font: 500 11px/1.7 Inter, ui-sans-serif, system-ui, sans-serif;
   letter-spacing: 0.34em;
   padding-left: 0.34em;
   opacity: 0;

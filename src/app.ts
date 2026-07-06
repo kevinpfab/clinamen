@@ -502,8 +502,8 @@ function handleBeforeUnload() {
 const offRipple = bus.on("ripple", ({ x, z, strength, direction }) => {
   addCollisionRipple(x, z, strength, direction);
 });
-const offTone = bus.on("tone", ({ sizeRatio, strength }) => {
-  audioEngine?.play(sizeRatio, strength);
+const offTone = bus.on("tone", ({ sizeRatio, strength, sustain }) => {
+  audioEngine?.play(sizeRatio, strength, sustain);
 });
 
 clearWaterState();

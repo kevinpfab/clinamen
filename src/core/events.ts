@@ -14,6 +14,8 @@ export type BasinEvents = {
   tone: {
     sizeRatio: number;
     strength: number;
+    // Duration multiplier for ceremonial rings; collision tones omit it.
+    sustain?: number;
   };
 };
 
