@@ -19,15 +19,32 @@ export function createBowlShellProfile(radius: number): BowlShellProfile {
   const wallRadius = (current: number, straighter: number) =>
     THREE.MathUtils.lerp(current, straighter, bowlWallStraightness);
 
+  // The rim lip is a shallow arc bridging the outer and inner walls so the
+  // profile never pinches into a knife edge at the top.
+  const rimOuterX = radius * 0.985;
+  const rimInnerX = radius * 0.940;
+  const rimCenterX = (rimOuterX + rimInnerX) / 2;
+  const rimHalfWidth = (rimOuterX - rimInnerX) / 2;
+  const rimLip = (t: number) => {
+    const angle = t * Math.PI;
+    return new THREE.Vector2(
+      rimCenterX + Math.cos(angle) * rimHalfWidth,
+      height + Math.sin(angle) * rimRoundness,
+    );
+  };
+
   const outer = [
     new THREE.Vector2(0, height * 0.050),
     new THREE.Vector2(radius * 0.54, height * 0.035),
     new THREE.Vector2(radius * wallRadius(0.76, 0.88), height * 0.080),
     new THREE.Vector2(radius * 0.998, height * 0.880),
-    new THREE.Vector2(radius * 0.975, height + rimRoundness),
+    rimLip(0),
+    rimLip(0.25),
+    rimLip(0.5),
   ];
   const inner = [
-    new THREE.Vector2(radius * 0.940, height * 0.955),
+    rimLip(0.75),
+    rimLip(1),
     new THREE.Vector2(radius * wallRadius(0.690, 0.800), height * 0.420),
     new THREE.Vector2(radius * 0.220, height * 0.082),
     new THREE.Vector2(0, height * 0.075),
