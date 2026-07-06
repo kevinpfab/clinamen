@@ -79,7 +79,7 @@ export function getCollisionRippleStrength(
 ) {
   const contactSpeed = Math.max(Math.abs(separatingSpeed), relativeSpeed * 0.24);
   const contactEnergy = contactSpeed * 2.0 + overlap * 2.2;
-  return clamp(0.16 + Math.sqrt(Math.max(0, contactEnergy)) * 0.34, 0.16, 0.66);
+  return clamp(0.10 + Math.sqrt(Math.max(0, contactEnergy)) * 0.22, 0.10, 0.44);
 }
 
 export function resolveBowlContacts(
