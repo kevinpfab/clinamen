@@ -73,8 +73,7 @@ let disposed = false;
 const waterSimulationFixedStep = waterSimulationStep;
 const maxWaterSimulationSubsteps = waterSimulationMaxSubsteps;
 
-const frameDiagnosticsEnabled = import.meta.env.DEV ||
-  new URLSearchParams(window.location.search).has("frameDiagnostics");
+const frameDiagnosticsEnabled = import.meta.env.DEV;
 const gpuFrameTimer = frameDiagnosticsEnabled ? createGpuFrameTimer(renderer) : null;
 let fpsCounter: FpsCounter | null = null;
 const slowFrameRafThresholdMs = 25;
