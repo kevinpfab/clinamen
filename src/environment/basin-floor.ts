@@ -123,6 +123,10 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
       float depth = basinDepthField(p);
       float edge = basinEdgeField(p);
       float caustics = floorCaustics(p + warp * 1.35, waveEnergy, waveSlope);
+      // Light focused by the actual wave field: expanding ripple rings project
+      // matching caustic rings that travel with the wavefront, unlike the
+      // procedural strands which only brighten with ambient wave energy.
+      float waveCaustic = sampledWaveDerived(p + warp * 0.85).z;
       float surfaceVariation = valueNoise(p * 0.54 + vec2(uTime * 0.012, -uTime * 0.010)) - 0.5;
 
       vec3 deepBlue = vec3(0.000, 0.360, 0.500);
@@ -132,6 +136,7 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
       color = mix(color, cyanBlue, 0.34 + depth * 0.16);
       color = mix(color, deepBlue * 0.96, edge * 0.08);
       color += vec3(0.86, 1.00, 0.96) * caustics * (1.08 + depth * 0.48);
+      color += vec3(0.88, 1.00, 0.97) * waveCaustic * (0.30 + depth * 0.16);
       color += vec3(0.46, 0.96, 0.96) * clamp(waveEnergy * 0.046, 0.0, 0.105);
       color += vec3(0.000, 0.060, 0.070) * (0.72 + depth * 0.28);
       color = mix(color, vec3(0.000, 0.070, 0.105), shadow);
