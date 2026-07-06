@@ -182,6 +182,12 @@ export const waterMaterial = new THREE.ShaderMaterial({
       float specular = pow(clamp(dot(normal, halfDirection), 0.0, 1.0), 118.0) * 0.44;
       float broadSpecular = pow(clamp(dot(normal, halfDirection), 0.0, 1.0), 22.0) * 0.045;
       float fresnel = pow(1.0 - clamp(dot(normal, viewDirection), 0.0, 1.0), 3.0);
+      // A two-color procedural sky sampled by the reflected view ray gives the
+      // fresnel term hue variation instead of a flat white glaze.
+      vec3 reflected = reflect(-viewDirection, normal);
+      vec3 skyZenith = vec3(0.42, 0.78, 0.92);
+      vec3 skyHorizon = vec3(0.86, 0.96, 0.98);
+      vec3 skyColor = mix(skyHorizon, skyZenith, smoothstep(0.0, 0.72, reflected.y));
       float causticLight = subtleCaustics(p + normal.xz * (0.20 + waveEnergy * 0.045), waveEnergy, slopeAmount);
       vec3 deepBlue = vec3(0.000, 0.180, 0.300);
       vec3 tealBlue = vec3(0.000, 0.440, 0.590);
@@ -200,7 +206,12 @@ export const waterMaterial = new THREE.ShaderMaterial({
         0.15
       );
       float shimmer = surface * 0.22 + waveHeight * 0.48;
-      float distanceFade = smoothstep(-5.0, 4.8, p.y);
+      // Brighten the far side of the pool relative to the camera so the
+      // gradient follows the view as it orbits (it was fixed to world +z).
+      vec2 cameraXZ = cameraPosition.xz;
+      float cameraXZLength = length(cameraXZ);
+      vec2 awayAxis = cameraXZLength > 0.001 ? -cameraXZ / cameraXZLength : vec2(0.0, 1.0);
+      float distanceFade = smoothstep(-5.0, 4.8, dot(p, awayAxis));
       float glancing = smoothstep(0.18, 0.84, fresnel);
       float lightBand = smoothstep(0.60, 1.0, sin((p.x * 0.42 + p.y * 0.18) + uTime * 0.22) * 0.5 + 0.5);
       vec3 color = mix(deepBlue, tealBlue, 0.62 + basinDepth * 0.18 + shimmer * 0.10 + distanceFade * 0.08);
@@ -211,10 +222,10 @@ export const waterMaterial = new THREE.ShaderMaterial({
         + lightBand * 0.008
         + specular * (0.78 + waveEnergy * 0.08)
         + broadSpecular
-        + fresnel * 0.040
         + causticLight * (0.82 + basinDepth * 0.52)
         + slopeAmount * 0.016
       );
+      color += skyColor * fresnel * 0.085;
       color += highlight * clamp(contactBase * 0.014, 0.0, 0.10);
       color += vec3(0.76, 1.0, 0.96) * clamp(waveEnergy * 0.026, 0.0, 0.14);
       color += vec3(0.72, 0.98, 0.94) * meniscus * 0.25;
