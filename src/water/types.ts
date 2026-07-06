@@ -17,6 +17,7 @@ export type WaterUniforms = {
   uInteractionFieldMap: { value: THREE.Texture | null };
   uSimWorld: { value: THREE.Vector4 };
   uPoolData: { value: THREE.Vector4 };
+  uWaveSpeed: { value: number };
   uRippleCenters: { value: THREE.Vector4[] };
   uRippleData: { value: THREE.Vector4[] };
   uRippleCount: { value: number };
@@ -36,4 +37,5 @@ export type WaterSimulationUniforms = {
   uImpulseData: { value: THREE.Vector4[] };
   uImpulseCount: { value: number };
   uDelta: { value: number };
+  uWaveKick: { value: number };
 };

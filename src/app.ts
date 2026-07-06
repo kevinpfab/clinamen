@@ -3,7 +3,8 @@ import {
   debugSettings,
   rendererPixelRatioLimit,
   simulationSettings,
-  waterSimulationStepInterval,
+  waterSimulationMaxSubsteps,
+  waterSimulationStep,
   world,
 } from "./config";
 import { camera, clock, disposeStage, renderer, scene } from "./core/stage";
@@ -68,10 +69,12 @@ let audioStartButton: AudioStartButton | null = null;
 let animationFrame = 0;
 let waterSimulationAccumulator = 0;
 let disposed = false;
-const waterSimulationFixedStep = waterSimulationStepInterval > 0
-  ? waterSimulationStepInterval
-  : 1 / 60;
-const maxWaterSimulationSubsteps = waterSimulationStepInterval > 0 ? 1 : 3;
+// The sim always integrates fixed 1/60 steps; slower devices catch up with
+// extra substeps instead of larger steps, which would change wave speed and
+// damping (a 1/30 step used to hit the shader's stepScale clamp and run the
+// water in ~17% slow motion relative to the analytic ripples).
+const waterSimulationFixedStep = waterSimulationStep;
+const maxWaterSimulationSubsteps = waterSimulationMaxSubsteps;
 
 const frameDiagnosticsEnabled = import.meta.env.DEV ||
   new URLSearchParams(window.location.search).has("frameDiagnostics");

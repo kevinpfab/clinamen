@@ -25,6 +25,7 @@ const interactionFieldUniforms: Record<string, THREE.IUniform> = {
   uTime: waterUniforms.uTime,
   uSimWorld: waterUniforms.uSimWorld,
   uPoolData: waterUniforms.uPoolData,
+  uWaveSpeed: waterUniforms.uWaveSpeed,
   uRippleCenters: waterUniforms.uRippleCenters,
   uRippleData: waterUniforms.uRippleData,
   uRippleCount: waterUniforms.uRippleCount,
@@ -49,6 +50,7 @@ export const interactionFieldMaterial = new THREE.ShaderMaterial({
     uniform float uTime;
     uniform vec4 uSimWorld;
     uniform vec4 uPoolData;
+    uniform float uWaveSpeed;
     uniform vec4 uRippleCenters[${maxRipples}];
     uniform vec4 uRippleData[${maxRipples}];
     uniform int uRippleCount;
@@ -185,8 +187,7 @@ export const interactionFieldMaterial = new THREE.ShaderMaterial({
         organic += sin(angle * 7.0 - age * 1.10 + center.y) * 0.020;
         organic += (valueNoise(offset * 0.74 + center * 0.13 + vec2(age * 0.08, -age * 0.05)) - 0.5) * 0.038;
 
-        float waveSpeed = 1.08 + strength * 0.42;
-        float travel = age * waveSpeed;
+        float travel = age * uWaveSpeed;
         float early = 1.0 - smoothstep(0.0, 0.26, progress);
         float forward = dot(radialDirection, direction);
         float directionalSpread = mix(

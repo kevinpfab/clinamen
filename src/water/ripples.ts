@@ -4,6 +4,7 @@ import {
   maxRipples,
   maxWaterBowls,
   velocityWorldScale,
+  waterWaveSpeed,
 } from "../config";
 import { waterUniforms } from "./uniforms";
 import { queueDirectionalWaterImpulse, queueWaterImpulse } from "./simulation";
@@ -140,8 +141,7 @@ function scatterActiveRipplesFromDraggedBowl(
       continue;
     }
 
-    const waveSpeed = 0.96 + ripple.strength * 0.34;
-    const travel = ripple.age * waveSpeed;
+    const travel = ripple.age * waterWaveSpeed;
     let nearestFrontDistance = Number.POSITIVE_INFINITY;
 
     const ringRadius = travel;

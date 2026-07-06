@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { maxWaterImpulses, waterSimulationSize } from "../config";
+import { maxWaterImpulses, waterSimulationSize, waterWaveSpeed } from "../config";
 import { renderer } from "../core/stage";
 import { waterUniforms } from "./uniforms";
 import type { WaterSimulationUniforms } from "./types";
@@ -44,6 +44,7 @@ const waterSimulationUniforms: WaterSimulationUniforms & Record<string, THREE.IU
   uImpulseData: { value: waterImpulseData },
   uImpulseCount: { value: 0 },
   uDelta: { value: 1 / 60 },
+  uWaveKick: { value: 0.64 },
 };
 export const waterSimulationMaterial = new THREE.ShaderMaterial({
   uniforms: waterSimulationUniforms,
@@ -65,6 +66,7 @@ export const waterSimulationMaterial = new THREE.ShaderMaterial({
     uniform vec4 uImpulseData[${maxWaterImpulses}];
     uniform int uImpulseCount;
     uniform float uDelta;
+    uniform float uWaveKick;
 
     varying vec2 vUv;
 
@@ -107,11 +109,11 @@ export const waterSimulationMaterial = new THREE.ShaderMaterial({
       float upRightHeight = sampledHeight(vUv + vec2(uTexel.x, uTexel.y), height);
       float cardinal = leftHeight + rightHeight + downHeight + upHeight;
       float diagonal = downLeftHeight + downRightHeight + upLeftHeight + upRightHeight;
-      float laplacian = cardinal * 0.72 + diagonal * 0.28 - height * 4.0;
+      float laplacian = cardinal * 0.8 + diagonal * 0.2 - height * 4.0;
       float gradientEnergy = abs(leftHeight - rightHeight) + abs(downHeight - upHeight);
 
       float stepScale = clamp(uDelta * 60.0, 0.35, 1.65);
-      velocity += laplacian * 0.64 * stepScale;
+      velocity += laplacian * uWaveKick * stepScale;
       velocity -= height * 0.018 * stepScale;
       velocity *= pow(0.982, stepScale);
       height += velocity * 0.34 * stepScale;
@@ -281,7 +283,22 @@ export function updateWaterSimulation(delta: number) {
 
   waterSimulationUniforms.uState.value = waterSimRead.texture;
   waterSimulationUniforms.uImpulseCount.value = impulseCount;
-  waterSimulationUniforms.uDelta.value = Math.min(delta, 0.04);
+  const clampedDelta = Math.min(delta, 0.04);
+  waterSimulationUniforms.uDelta.value = clampedDelta;
+
+  // Derive the integration constant from the wave speed in world units so
+  // ring propagation matches the analytic ripple layers on every device.
+  // courant2 = (c * dt / dx)^2; the shader applies uWaveKick * stepScale to
+  // velocity and 0.34 * stepScale to height, so fold both factors back out.
+  // The clamp keeps the scheme inside the 9-point stencil stability limit
+  // (~0.625 for 0.8/0.2 weights) with margin.
+  const texelWorldSize = waterUniforms.uSimWorld.value.z / waterSimulationSize;
+  const stepScale = THREE.MathUtils.clamp(clampedDelta * 60, 0.35, 1.65);
+  const courant2 = Math.min(
+    ((waterWaveSpeed * clampedDelta) / Math.max(texelWorldSize, 0.0001)) ** 2,
+    0.5,
+  );
+  waterSimulationUniforms.uWaveKick.value = courant2 / (0.34 * stepScale * stepScale);
   simulationQuad.material = waterSimulationMaterial;
   renderer.setRenderTarget(waterSimWrite);
   renderer.render(simulationScene, simulationCamera);
