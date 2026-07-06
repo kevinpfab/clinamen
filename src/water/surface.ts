@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { circularPoolSegments } from "../config";
 import { scene } from "../core/stage";
 import { waterUniforms } from "./uniforms";
+import { noisePeriod } from "./noise-texture";
 
 // The brilliant-blue water surface: a circular plane driven by a custom shader
 // that reads the simulation, bowl, and precomputed interaction fields.
@@ -25,6 +26,7 @@ export const waterMaterial = new THREE.ShaderMaterial({
     uniform sampler2D uWaveStateMap;
     uniform sampler2D uWaveDetailMap;
     uniform sampler2D uWaveDerivedMap;
+    uniform sampler2D uNoiseMap;
     uniform vec4 uSimWorld;
     uniform vec4 uPoolData;
     varying vec2 vUv;
@@ -32,19 +34,8 @@ export const waterMaterial = new THREE.ShaderMaterial({
 
     const float BASIN_TAU = 6.28318530718;
 
-    float hash21(vec2 p) {
-      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-    }
-
     float valueNoise(vec2 p) {
-      vec2 i = floor(p);
-      vec2 f = fract(p);
-      vec2 u = f * f * (3.0 - 2.0 * f);
-      float a = hash21(i);
-      float b = hash21(i + vec2(1.0, 0.0));
-      float c = hash21(i + vec2(0.0, 1.0));
-      float d = hash21(i + vec2(1.0, 1.0));
-      return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+      return texture2D(uNoiseMap, p * ${(1 / noisePeriod).toFixed(6)}).r;
     }
 
     float waveLayer(vec2 p, vec2 direction, float speed, float scale, float weight) {

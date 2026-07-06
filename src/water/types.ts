@@ -18,6 +18,7 @@ export type WaterUniforms = {
   uWaveStateMap: { value: THREE.Texture | null };
   uWaveDetailMap: { value: THREE.Texture | null };
   uWaveDerivedMap: { value: THREE.Texture | null };
+  uNoiseMap: { value: THREE.Texture | null };
   uSimWorld: { value: THREE.Vector4 };
   uPoolData: { value: THREE.Vector4 };
   uWaveSpeed: { value: number };

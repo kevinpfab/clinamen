@@ -15,6 +15,7 @@ export const waterUniforms = THREE.UniformsUtils.merge([
     uWaveStateMap: { value: null },
     uWaveDetailMap: { value: null },
     uWaveDerivedMap: { value: null },
+    uNoiseMap: { value: null },
     uSimWorld: { value: new THREE.Vector4(-world.width / 2, -world.height / 2, world.width, world.height) },
     uPoolData: { value: new THREE.Vector4(0, 0, getWaterSurfaceRadius(), 0.72) },
     uWaveSpeed: { value: waterWaveSpeed },

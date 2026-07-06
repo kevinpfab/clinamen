@@ -50,6 +50,7 @@ import { disposeBowlField, updateBowlField } from "./water/bowl-field";
 import { disposeInteractionField, updateInteractionField } from "./water/interaction-field";
 import { disposeWaveState, updateWaveState } from "./water/wave-state";
 import { disposeWaterSampler, updateWaterSampler } from "./water/water-sampler";
+import { disposeNoiseTexture } from "./water/noise-texture";
 import { BasinAudio } from "./audio/basin-audio";
 import { EventBus, type BasinEvents } from "./core/events";
 import { createGpuFrameTimer, type GpuTimingSnapshot } from "./core/gpu-timer";
@@ -473,6 +474,7 @@ export function disposeApp(options: DisposeAppOptions = {}) {
     disposeWaveState();
     disposeWaterSampler();
     disposeWaterSimulation();
+    disposeNoiseTexture();
     disposeFlowJets();
     disposeWaterSurface();
     disposeWoodFloor();
