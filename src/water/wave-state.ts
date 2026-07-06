@@ -7,7 +7,7 @@ import { waterUniforms } from "./uniforms";
 // are combined once per frame at field resolution into:
 //   waveState   = (waveHeight, waveSlope, waveEnergy, contactAccent)
 //   waveDetail  = (normalHeight, meniscusSource, bowlFootprint, simEnergy)
-//   waveDerived = (slopeX, slopeY, causticFocus, 0)
+//   waveDerived = (slopeX, slopeY, causticFocus, foam)
 // The full-screen water surface and basin floor shaders then read one or two
 // texels here instead of independently reconstructing the wave state from
 // three textures per pixel — and both layers see identical wave data by
@@ -134,6 +134,7 @@ export const waveDerivedMaterial = new THREE.ShaderMaterial({
   uniforms: {
     uWaveDetailMap: waterUniforms.uWaveDetailMap,
     uWaveStateMap: waterUniforms.uWaveStateMap,
+    uHeightMap: waterUniforms.uHeightMap,
     uSimWorld: waterUniforms.uSimWorld,
     uTexel: {
       value: new THREE.Vector2(1 / waterSimulationSize, 1 / waterSimulationSize),
@@ -145,6 +146,7 @@ export const waveDerivedMaterial = new THREE.ShaderMaterial({
 
     uniform sampler2D uWaveDetailMap;
     uniform sampler2D uWaveStateMap;
+    uniform sampler2D uHeightMap;
     uniform vec4 uSimWorld;
     uniform vec2 uTexel;
 
@@ -169,8 +171,9 @@ export const waveDerivedMaterial = new THREE.ShaderMaterial({
       float focus = max(-laplacian, 0.0) * 0.075;
       float energy = texture2D(uWaveStateMap, vUv).b;
       float caustic = clamp(focus * (0.55 + clamp(energy, 0.0, 1.2) * 0.45), 0.0, 1.4);
+      float foam = texture2D(uHeightMap, vUv).a;
 
-      gl_FragColor = vec4(slope, caustic, 0.0);
+      gl_FragColor = vec4(slope, caustic, foam);
     }
   `,
 });

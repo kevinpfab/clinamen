@@ -119,15 +119,6 @@ export const waterMaterial = new THREE.ShaderMaterial({
       return slope;
     }
 
-    vec2 surfaceSlope(vec2 p) {
-      return sampledWaveDerived(p).xy + shimmerSlope(p);
-    }
-
-    vec3 surfaceNormal(vec2 p) {
-      vec2 slope = surfaceSlope(p);
-      return normalize(vec3(slope.x, 1.0, slope.y));
-    }
-
     vec2 waterWarp(vec2 p, vec2 slope, float waveHeight, float waveSlope, float waveEnergy) {
       float breakup = clamp(abs(waveHeight) * 1.45 + waveSlope * 0.11 + waveEnergy * 0.26, 0.0, 1.0);
       vec2 drift = vec2(
@@ -179,7 +170,9 @@ export const waterMaterial = new THREE.ShaderMaterial({
       float contactBase = waveState.w;
       float meniscus = clamp(waveDetail.y * (0.048 + waveEnergy * 0.006), 0.0, 0.18);
       float contactAccent = contactBase + meniscus;
-      vec2 slope = surfaceSlope(p);
+      vec4 waveDerived = sampledWaveDerived(p);
+      float foam = waveDerived.w;
+      vec2 slope = waveDerived.xy + shimmerSlope(p);
       float slopeAmount = length(slope);
       vec3 normal = normalize(vec3(slope.x, 1.0, slope.y));
       vec3 lightDirection = normalize(vec3(-0.12, 0.99, 0.08));
@@ -201,6 +194,11 @@ export const waterMaterial = new THREE.ShaderMaterial({
       whiteCrest += smoothstep(0.24, 1.00, simulationEnergy + contactBase * 0.20) * clamp(slopeAmount * 0.020, 0.0, 0.055);
       whiteCrest += clamp(contactAccent * 0.21, 0.0, 0.12);
       whiteCrest += clamp(contactBase * 0.010 + waveEnergy * 0.030, 0.0, 0.10);
+      whiteCrest += clamp(
+        foam * (0.11 + valueNoise(p * 4.2 + vec2(uTime * 0.11, -uTime * 0.09)) * 0.10),
+        0.0,
+        0.15
+      );
       float shimmer = surface * 0.22 + waveHeight * 0.48;
       float distanceFade = smoothstep(-5.0, 4.8, p.y);
       float glancing = smoothstep(0.18, 0.84, fresnel);

@@ -98,6 +98,7 @@ export const waterSimulationMaterial = new THREE.ShaderMaterial({
       float height = state.r;
       float velocity = state.g;
       float energy = state.b;
+      float foam = state.a;
 
       float leftHeight = sampledHeight(vUv + vec2(-uTexel.x, 0.0), height);
       float rightHeight = sampledHeight(vUv + vec2(uTexel.x, 0.0), height);
@@ -120,6 +121,16 @@ export const waterSimulationMaterial = new THREE.ShaderMaterial({
       height *= pow(0.998, stepScale);
       energy += (abs(laplacian) * 0.092 + gradientEnergy * 0.034 + abs(velocity) * 0.018) * stepScale;
       energy *= pow(0.956, stepScale);
+
+      // Foam has memory: it spawns where the water is agitated, decays over
+      // about a second, and drifts downhill (semi-Lagrangian pull from the
+      // up-slope neighbor) so wakes leave dissolving trails instead of a
+      // glow that switches off with the energy channel.
+      vec2 heightGradient = vec2(rightHeight - leftHeight, upHeight - downHeight) * 0.5;
+      vec2 foamSourceUv = clamp(vUv + heightGradient * uTexel * 60.0, 0.001, 0.999);
+      foam = texture2D(uState, foamSourceUv).a;
+      foam += smoothstep(0.30, 0.90, energy) * 0.030 * stepScale;
+      foam *= pow(0.988, stepScale);
 
       vec2 p = uSimWorld.xy + vUv * uSimWorld.zw;
       float wall = basinWall(p);
@@ -146,22 +157,23 @@ export const waterSimulationMaterial = new THREE.ShaderMaterial({
       velocity *= pow(mix(1.0, 0.70, wall), stepScale);
       height *= mix(1.0, 0.82, wall * stepScale);
       energy *= mix(1.0, 0.58, wall * stepScale);
+      foam *= mix(1.0, 0.80, wall * stepScale);
 
       float mask = basinMask(p);
       height *= mask;
       velocity *= mask;
       energy *= mask;
+      foam *= mask;
 
       gl_FragColor = vec4(
         clamp(height, -2.0, 2.0),
         clamp(velocity, -2.0, 2.0),
         clamp(energy, 0.0, 2.0),
-        1.0
+        clamp(foam, 0.0, 1.5)
       );
     }
   `,
 });
-export const waterResetMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
 const simulationScene = new THREE.Scene();
 const simulationCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 export const simulationQuad: THREE.Mesh<THREE.PlaneGeometry, THREE.Material> = new THREE.Mesh(
@@ -247,13 +259,17 @@ export function queueDirectionalWaterImpulseComponents(
   );
 }
 
+const previousClearColor = new THREE.Color();
+
+// Clear to transparent black: alpha is the foam channel and must start at 0.
 function clearWaterSimulationTarget(target: THREE.WebGLRenderTarget) {
-  const previousMaterial = simulationQuad.material;
-  simulationQuad.material = waterResetMaterial;
+  renderer.getClearColor(previousClearColor);
+  const previousClearAlpha = renderer.getClearAlpha();
+  renderer.setClearColor(0x000000, 0);
   renderer.setRenderTarget(target);
-  renderer.render(simulationScene, simulationCamera);
-  simulationQuad.material = previousMaterial;
+  renderer.clear(true, false, false);
   renderer.setRenderTarget(null);
+  renderer.setClearColor(previousClearColor, previousClearAlpha);
 }
 
 export function clearWaterSimulation() {
@@ -313,7 +329,6 @@ export function updateWaterSimulation(delta: number) {
 
 export function disposeWaterSimulation() {
   waterSimulationMaterial.dispose();
-  waterResetMaterial.dispose();
   simulationQuad.geometry.dispose();
   waterSimRead.dispose();
   waterSimWrite.dispose();
