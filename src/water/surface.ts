@@ -7,10 +7,7 @@ import { waterUniforms } from "./uniforms";
 // that reads the simulation, bowl, and precomputed interaction fields.
 export const waterMaterial = new THREE.ShaderMaterial({
   uniforms: waterUniforms,
-  lights: true,
   vertexShader: `
-    #include <common>
-
     varying vec2 vUv;
     varying vec3 vWorldPosition;
 
@@ -18,22 +15,16 @@ export const waterMaterial = new THREE.ShaderMaterial({
       vUv = uv;
       vec4 worldPosition = modelMatrix * vec4(position, 1.0);
       vWorldPosition = worldPosition.xyz;
-      vec3 transformedNormal = normalMatrix * normal;
       gl_Position = projectionMatrix * viewMatrix * worldPosition;
     }
   `,
   fragmentShader: `
     precision highp float;
 
-    #include <common>
-    #include <lights_pars_begin>
-
     uniform float uTime;
-    uniform vec2 uResolution;
     uniform sampler2D uHeightMap;
     uniform sampler2D uBowlFieldMap;
     uniform sampler2D uInteractionFieldMap;
-    uniform vec3 uCameraPosition;
     uniform vec4 uSimWorld;
     uniform vec4 uPoolData;
     varying vec2 vUv;
@@ -231,7 +222,7 @@ export const waterMaterial = new THREE.ShaderMaterial({
       float slopeAmount = length(slope);
       vec3 normal = normalize(vec3(slope.x, 1.0, slope.y));
       vec3 lightDirection = normalize(vec3(-0.12, 0.99, 0.08));
-      vec3 viewDirection = normalize(uCameraPosition - vWorldPosition);
+      vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
       vec3 halfDirection = normalize(lightDirection + viewDirection);
       float directionalLight = clamp(dot(normal, lightDirection), 0.0, 1.0);
       float specular = pow(clamp(dot(normal, halfDirection), 0.0, 1.0), 118.0) * 0.44;

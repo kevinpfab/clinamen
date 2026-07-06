@@ -12,11 +12,9 @@ export type Ripple = {
 
 export type WaterUniforms = {
   uTime: { value: number };
-  uResolution: { value: THREE.Vector2 };
   uHeightMap: { value: THREE.Texture | null };
   uBowlFieldMap: { value: THREE.Texture | null };
   uInteractionFieldMap: { value: THREE.Texture | null };
-  uCameraPosition: { value: THREE.Vector3 };
   uSimWorld: { value: THREE.Vector4 };
   uPoolData: { value: THREE.Vector4 };
   uRippleCenters: { value: THREE.Vector4[] };

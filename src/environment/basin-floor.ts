@@ -1,10 +1,5 @@
 import * as THREE from "three";
-import {
-  circularPoolSegments,
-  maxFlowJets,
-  maxRipples,
-  waterSimulationSize,
-} from "../config";
+import { circularPoolSegments, waterSimulationSize } from "../config";
 import { scene } from "../core/stage";
 import { waterUniforms } from "../water/uniforms";
 
@@ -31,17 +26,9 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
     uniform sampler2D uInteractionFieldMap;
     uniform vec4 uSimWorld;
     uniform vec4 uPoolData;
-    uniform vec4 uRippleCenters[${maxRipples}];
-    uniform vec4 uRippleData[${maxRipples}];
-    uniform int uRippleCount;
-    uniform vec4 uFlowJetData[${maxFlowJets}];
-    uniform vec4 uFlowJetParams[${maxFlowJets}];
-    uniform int uFlowJetCount;
 
     varying vec2 vUv;
     varying vec3 vWorldPosition;
-
-    const float BASIN_TAU = 6.28318530718;
 
     float hash21(vec2 p) {
       return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
@@ -107,125 +94,6 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
       height = center.r;
       energy = center.b;
       return vec2(leftHeight - rightHeight, downHeight - upHeight) / (worldTexel * 2.0);
-    }
-
-    vec3 explicitRippleDistortion(vec2 p, out vec2 directionWarp) {
-      float height = 0.0;
-      float slope = 0.0;
-      float energy = 0.0;
-      directionWarp = vec2(0.0);
-
-      for (int i = 0; i < ${maxRipples}; i++) {
-        if (i >= uRippleCount) {
-          break;
-        }
-
-        vec2 center = uRippleCenters[i].xy;
-        float age = uRippleData[i].x;
-        float lifetime = max(uRippleData[i].y, 0.001);
-        float strength = uRippleData[i].z;
-        float shape = uRippleData[i].w;
-        vec2 direction = uRippleCenters[i].zw;
-        float directionLength = length(direction);
-        direction = directionLength > 0.001 ? direction / directionLength : vec2(1.0, 0.0);
-        vec2 tangent = vec2(-direction.y, direction.x);
-        vec2 offset = p - center;
-        float progress = clamp(age / lifetime, 0.0, 1.0);
-        float fade = pow(1.0 - progress, 1.55) * smoothstep(0.0, 0.055, age);
-
-        if (shape > 0.5) {
-          float motion = clamp(directionLength - 1.0, 0.0, 1.0);
-          float behind = max(-dot(offset, direction), 0.0);
-          float across = dot(offset, tangent);
-          float radiusHint = 0.24 + strength * 0.42 + motion * 0.22;
-          float travel = age * (0.92 + strength * 0.26 + motion * 0.34);
-          float packetWidth = radiusHint * (0.82 + motion * 0.24) + progress * 0.36;
-          float packet = exp(-pow((behind - travel) / max(packetWidth, 0.001), 2.0));
-          float wakeWidth = radiusHint * (0.34 + progress * 0.32) + behind * 0.030;
-          float divergentLine = abs(across) - behind * mix(0.36, 0.52, motion);
-          float divergent = exp(-pow(divergentLine / max(wakeWidth, 0.001), 2.0));
-          divergent *= smoothstep(0.0, radiusHint * 0.45 + 0.055, behind);
-          divergent *= exp(-behind / (3.0 + motion * 1.55)) * packet * fade;
-          float transverse = exp(-pow(across / max(radiusHint * 1.25 + behind * 0.16, 0.001), 2.0));
-          transverse *= smoothstep(0.0, radiusHint * 0.52 + 0.065, behind);
-          transverse *= exp(-behind / (2.4 + motion * 1.2)) * packet * fade;
-          float side = across < 0.0 ? -1.0 : 1.0;
-          float amplitude = strength * (0.026 + motion * 0.016);
-          vec2 localWarp = (-direction * transverse * 0.70 + tangent * side * divergent * 0.55) * amplitude;
-          directionWarp += localWarp;
-          height += dot(localWarp, direction) * 0.35;
-          slope += (divergent + transverse) * strength * 0.42;
-          energy += (divergent + transverse) * strength * 0.36;
-          continue;
-        }
-
-        float d = length(offset);
-        vec2 radial = d > 0.001 ? offset / d : direction;
-        float waveSpeed = 1.08 + strength * 0.42;
-        float travel = age * waveSpeed;
-        float packetWidth = 0.130 + progress * 0.220 + strength * 0.036;
-        float signedDistance = d - travel;
-        float packet = exp(-pow(signedDistance / max(packetWidth, 0.001), 2.0));
-        float crest = exp(-pow(signedDistance / max(packetWidth * 0.42, 0.001), 2.0));
-        float trough = exp(-pow((signedDistance + packetWidth * 0.64) / max(packetWidth * 0.58, 0.001), 2.0));
-        float carrier = sin(signedDistance * mix(28.0, 18.0, progress));
-        float ripple = (crest - trough * 0.72 + carrier * packet * 0.12) * strength * fade;
-        float distanceDamp = inversesqrt(1.0 + d * 0.78);
-        directionWarp += radial * ripple * distanceDamp * 0.046;
-        height += ripple * distanceDamp * 0.12;
-        slope += abs(ripple) * distanceDamp * 0.82;
-        energy += abs(ripple) * distanceDamp;
-      }
-
-      return vec3(height, slope, energy);
-    }
-
-    vec3 flowJetDistortion(vec2 p, out vec2 flowWarp) {
-      float height = 0.0;
-      float slope = 0.0;
-      float energy = 0.0;
-      flowWarp = vec2(0.0);
-
-      for (int i = 0; i < ${maxFlowJets}; i++) {
-        if (i >= uFlowJetCount) {
-          break;
-        }
-
-        vec4 jet = uFlowJetData[i];
-        vec4 params = uFlowJetParams[i];
-        vec2 source = jet.xy;
-        vec2 direction = length(jet.zw) > 0.001 ? normalize(jet.zw) : vec2(1.0, 0.0);
-        vec2 tangent = vec2(-direction.y, direction.x);
-        float radius = max(params.x, 0.001);
-        float strength = params.y;
-        float phase = params.w;
-        vec2 offset = p - source;
-        float along = dot(offset, direction);
-        float across = dot(offset, tangent);
-        float downstream = smoothstep(-radius * 0.16, radius * 0.62, along);
-        float activeAlong = max(along, 0.0);
-        float lateralSpread = radius * (0.86 + activeAlong * 0.085);
-        float centerEnvelope = downstream
-          * exp(-pow(across / max(lateralSpread, 0.001), 2.0))
-          * exp(-activeAlong / (radius * 7.8));
-        float shoulderDistance = abs(across) - radius * (0.72 + activeAlong * 0.022);
-        float shoulderEnvelope = downstream
-          * exp(-pow(shoulderDistance / (radius * 0.38 + activeAlong * 0.014), 2.0))
-          * exp(-activeAlong / (radius * 6.2));
-        float nozzle = exp(-pow(length(offset) / (radius * 1.18), 2.0));
-        float centerWave = sin(activeAlong / radius * 3.10 - uTime * 1.86 + phase * 1.71) * centerEnvelope;
-        float shoulderWave = sin(activeAlong / radius * 5.20 - uTime * 2.42 + abs(across) / radius * 0.78 + phase) * shoulderEnvelope;
-        float side = across < 0.0 ? -1.0 : 1.0;
-        float force = strength * 30.0;
-
-        flowWarp += direction * (centerWave * 0.058 + nozzle * 0.030) * force;
-        flowWarp += tangent * side * shoulderWave * 0.040 * force;
-        height += (centerWave * 0.052 + shoulderWave * 0.026 + nozzle * 0.021) * force;
-        slope += (abs(centerWave) * 0.44 + abs(shoulderWave) * 0.34 + nozzle * 0.34) * force;
-        energy += (centerEnvelope * 0.32 + shoulderEnvelope * 0.26 + nozzle * 0.48) * force;
-      }
-
-      return vec3(height, slope, energy);
     }
 
     vec2 floorWaterWarp(vec2 p, out float waveHeight, out float waveSlope, out float waveEnergy) {

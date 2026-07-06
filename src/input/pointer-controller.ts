@@ -22,7 +22,6 @@ import {
 
 type PointerControllerDeps = {
   bowlSystem: BowlSystem;
-  onCameraChanged: () => void;
 };
 
 export type PointerController = {
@@ -56,7 +55,6 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
 
   function syncCamera() {
     applyCameraOrbit();
-    deps.onCameraChanged();
   }
 
   function getPointerWaterPoint(event: PointerEvent) {

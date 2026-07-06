@@ -202,15 +202,6 @@ function createFrameDiagnostics(
   };
 }
 
-function syncCameraUniforms() {
-  waterUniforms.uCameraPosition.value.copy(camera.position);
-}
-
-function applyCameraAndSync() {
-  applyCameraOrbit();
-  syncCameraUniforms();
-}
-
 function clearWaterState() {
   waterSimulationAccumulator = 0;
   clearWaterSimulation();
@@ -252,7 +243,7 @@ function updateWorldSize() {
     cameraOrbit.maxDistance,
   );
   camera.updateProjectionMatrix();
-  applyCameraAndSync();
+  applyCameraOrbit();
 
   water.scale.set(waterSurfaceRadius, waterSurfaceRadius, 1);
   basinFloor.scale.set(waterSurfaceRadius, waterSurfaceRadius, 1);
@@ -262,7 +253,6 @@ function updateWorldSize() {
   woodFloor.geometry.dispose();
   woodFloor.geometry = createCircularWoodFloorGeometry(floorExtent, waterSurfaceRadius);
 
-  waterUniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
   waterUniforms.uSimWorld.value.set(
     -waterSurfaceRadius,
     -waterSurfaceRadius,
@@ -505,7 +495,6 @@ updateWorldSize();
 bowlSystem.rebuild();
 pointerController = createPointerController({
   bowlSystem,
-  onCameraChanged: syncCameraUniforms,
 });
 audioStartButton = createAudioStartButton({ onStartAudio: startAudio });
 const flowShapeControl = createFlowShapeControl({
