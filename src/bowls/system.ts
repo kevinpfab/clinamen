@@ -19,7 +19,6 @@ import {
 } from "../physics/collision";
 import { resolveCircularBoundaryContact } from "../physics/bounds";
 import { sampleBasinCurrent, type BasinCurrentSample } from "../physics/flow";
-import { sampleWaterSurface, type WaterSurfaceSample } from "../water/water-sampler";
 import type { BowlBody } from "./types";
 import { createBowlInstanceRenderer, type BowlInstanceRenderer } from "./instances";
 import { bowlResonancePulseLifetime } from "./materials";
@@ -47,12 +46,6 @@ export class BowlSystem {
     rimChannel: 0,
   };
   private readonly currentVelocity = new THREE.Vector2();
-  private readonly waterSample: WaterSurfaceSample = {
-    height: 0,
-    slopeX: 0,
-    slopeZ: 0,
-    energy: 0,
-  };
 
   constructor(private readonly bus: EventBus<BasinEvents>) {}
 
@@ -117,22 +110,6 @@ export class BowlSystem {
       bowl.mesh.position.x += bowl.velocity.x * delta * velocityWorldScale;
       bowl.mesh.position.z += bowl.velocity.y * delta * velocityWorldScale;
       bowl.mesh.rotation.y += bowl.angularVelocity * delta;
-
-      // Two-way coupling: ride the local wave. The bowl bobs with the wave
-      // height, tilts with the surface slope, and is nudged downhill, so
-      // waves visibly move bowls (and can nudge them into audible
-      // collisions). Larger bowls respond less. The sampled slope carries
-      // the shader's -1.62 * gradient convention, hence the divide.
-      if (sampleWaterSurface(bowl.mesh.position.x, bowl.mesh.position.z, this.waterSample)) {
-        const sizeDamp = 1 / (0.55 + bowl.radius);
-        bowl.mesh.position.y = getBowlPlaneY(bowl.radius)
-          + this.waterSample.height * 0.30 * sizeDamp;
-        bowl.visual.rotation.x = this.waterSample.slopeZ * 0.16 * sizeDamp;
-        bowl.visual.rotation.z = -this.waterSample.slopeX * 0.16 * sizeDamp;
-        const drift = (delta * 0.022 * sizeDamp) / 1.62;
-        bowl.velocity.x += this.waterSample.slopeX * drift;
-        bowl.velocity.y += this.waterSample.slopeZ * drift;
-      }
 
       this.keepInsideBounds(bowl);
     }
