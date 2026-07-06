@@ -342,7 +342,7 @@ function animate(now: DOMHighResTimeStamp) {
   const elapsed = clock.elapsedTime;
   waterUniforms.uTime.value = elapsed;
 
-  const heldBowl = intro?.getPinnedBowl() ?? pointerController?.getDraggedBowl() ?? null;
+  const heldBowl = pointerController?.getDraggedBowl() ?? null;
   bowlSystem.update(delta, elapsed, heldBowl);
   recordStep?.("bowls");
   bowlSystem.resolveCollisions(elapsed, heldBowl);

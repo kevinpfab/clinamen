@@ -36,6 +36,10 @@ const maxBowlMomentumStrength = 1;
 
 export class BowlSystem {
   private bowlsInternal: BowlBody[] = [];
+  // While frozen (the intro, until every bowl has surfaced) bowls only spin
+  // in place: no drift, no collisions. The simulation then starts as one
+  // moment instead of bowl by bowl.
+  private frozen = false;
   private bowlInstances: BowlInstanceRenderer | null = null;
   private readonly contactStates = new Map<number, BowlContactState>();
   private readonly collisionBodies: BowlCollisionBody[] = [];
@@ -52,6 +56,10 @@ export class BowlSystem {
 
   get bowls() {
     return this.bowlsInternal;
+  }
+
+  setFrozen(frozen: boolean) {
+    this.frozen = frozen;
   }
 
   rebuild() {
@@ -75,6 +83,11 @@ export class BowlSystem {
         - bowlEmergenceDepth * (1 - bowl.emergence);
       bowl.visual.rotation.x = 0;
       bowl.visual.rotation.z = 0;
+
+      if (this.frozen) {
+        bowl.mesh.rotation.y += bowl.angularVelocity * delta * 0.30;
+        continue;
+      }
 
       // Surfacing bowls hold their position until they fully emerge.
       if (bowl.emergence < 1) {
@@ -123,6 +136,10 @@ export class BowlSystem {
   }
 
   resolveCollisions(now: number, draggedBowl: BowlBody | null) {
+    if (this.frozen) {
+      return;
+    }
+
     this.syncCollisionBodies(draggedBowl);
     const collisionEvents = resolveBowlContacts(
       this.collisionBodies,

@@ -9,6 +9,7 @@ import {
 import { getWaterSurfaceRadius } from "../core/world";
 import { pseudoRandom } from "../core/math";
 import type { LightingSystem } from "../core/lighting";
+import { getBowlCenterLimit } from "../bowls/tuning";
 import { waterUniforms } from "../water/uniforms";
 import { triggerBowlResonance } from "../bowls/resonance";
 import type { BowlBody } from "../bowls/types";
@@ -74,7 +75,6 @@ type IntroSequenceDeps = {
 
 export type IntroSequence = {
   update: (delta: number) => void;
-  getPinnedBowl: () => BowlBody | null;
   dispose: () => void;
 };
 
@@ -144,47 +144,117 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
   );
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // Center the hero, still it, and clear a landing zone around it. Everyone
-  // else waits below the surface.
+  // The hero sits at the pool's center for the title composition. Neighbors
+  // it would overlap are moved to spots verified clear of every other bowl,
+  // so the layout stays collision-free and nothing shifts while the whole
+  // simulation waits, frozen, for the last bowl to surface.
   hero.mesh.position.x = 0;
   hero.mesh.position.z = 0;
   hero.velocity.set(0, 0);
+  const heroX = 0;
+  const heroZ = 0;
+  deps.bowlSystem.setFrozen(true);
+
+  // The spawn scatter can leave overlapping pairs (its sampler falls back to
+  // an unchecked center ring when the pool is crowded). The live simulation
+  // used to separate those within a frame; frozen, they would surface visibly
+  // intersecting. Relax the layout until every pair clears, with the centered
+  // hero immovable.
+  function clampToBasin(bowl: BowlBody) {
+    const limit = getBowlCenterLimit(bowl.radius);
+    const length = Math.hypot(bowl.mesh.position.x, bowl.mesh.position.z);
+    if (length > limit) {
+      const scale = limit / length;
+      bowl.mesh.position.x *= scale;
+      bowl.mesh.position.z *= scale;
+    }
+  }
+
+  for (let iteration = 0; iteration < 120; iteration += 1) {
+    let separated = true;
+    for (let i = 0; i < bowls.length; i += 1) {
+      for (let j = i + 1; j < bowls.length; j += 1) {
+        const a = bowls[i];
+        const b = bowls[j];
+        const gap = a.contactRadius + b.contactRadius + 0.06;
+        const dx = b.mesh.position.x - a.mesh.position.x;
+        const dz = b.mesh.position.z - a.mesh.position.z;
+        const distance = Math.hypot(dx, dz);
+        if (distance >= gap) {
+          continue;
+        }
+
+        separated = false;
+        let normalX: number;
+        let normalZ: number;
+        if (distance > 0.001) {
+          normalX = dx / distance;
+          normalZ = dz / distance;
+        } else {
+          const angle = pseudoRandom(a.id * 13.7 + b.id * 3.1 + iteration * 0.7) * Math.PI * 2;
+          normalX = Math.cos(angle);
+          normalZ = Math.sin(angle);
+        }
+
+        const shortfall = gap - distance;
+        if (a === hero || b === hero) {
+          const mover = a === hero ? b : a;
+          const sign = a === hero ? 1 : -1;
+          mover.mesh.position.x += normalX * shortfall * sign;
+          mover.mesh.position.z += normalZ * shortfall * sign;
+          clampToBasin(mover);
+        } else {
+          const push = shortfall * 0.55;
+          a.mesh.position.x -= normalX * push;
+          a.mesh.position.z -= normalZ * push;
+          b.mesh.position.x += normalX * push;
+          b.mesh.position.z += normalZ * push;
+          clampToBasin(a);
+          clampToBasin(b);
+        }
+      }
+    }
+
+    if (separated) {
+      break;
+    }
+  }
+
   const emergenceEntries: EmergenceEntry[] = [];
-  const poolRadius = getWaterSurfaceRadius();
+  let maxHeroDistance = 0.001;
   for (const bowl of bowls) {
     if (bowl === hero) {
       continue;
     }
 
-    const clearance = hero.contactRadius + bowl.contactRadius + 0.06;
-    const distance = Math.hypot(bowl.mesh.position.x, bowl.mesh.position.z);
-    if (distance < clearance) {
-      const angle = distance > 0.001
-        ? Math.atan2(bowl.mesh.position.z, bowl.mesh.position.x)
-        : pseudoRandom(bowl.id * 3.7 + 0.4) * Math.PI * 2;
-      bowl.mesh.position.x = Math.cos(angle) * clearance;
-      bowl.mesh.position.z = Math.sin(angle) * clearance;
-      deps.bowlSystem.keepInsideBounds(bowl, 0);
-    }
-
     bowl.emergence = 0;
-    emergenceEntries.push({
-      bowl,
-      delay: emergencePause
-        + (Math.hypot(bowl.mesh.position.x, bowl.mesh.position.z) / poolRadius) * emergenceSpread
-        + pseudoRandom(bowl.id * 7.31 + 1.7) * emergenceJitter,
-      rippled: false,
-    });
+    // Rest until the simulation starts; the basin current then eases every
+    // bowl into drift, so no one carries a phantom wake while frozen.
+    bowl.velocity.set(0, 0);
+    const heroDistance = Math.hypot(
+      bowl.mesh.position.x - heroX,
+      bowl.mesh.position.z - heroZ,
+    );
+    maxHeroDistance = Math.max(maxHeroDistance, heroDistance);
+    emergenceEntries.push({ bowl, delay: heroDistance, rippled: false });
+  }
+  for (const entry of emergenceEntries) {
+    entry.delay = emergencePause
+      + (entry.delay / maxHeroDistance) * emergenceSpread
+      + pseudoRandom(entry.bowl.id * 7.31 + 1.7) * emergenceJitter;
   }
 
+  // Both lights sit on the camera's center axis (x = 0): off-axis light in a
+  // black frame shifts the bowl's lit silhouette sideways and makes a
+  // perfectly centered bowl read as off-center.
   const spotlight = new THREE.SpotLight(0xfff1de, spotlightIntensity, 0, 0.4, 0.9, 2);
-  spotlight.position.set(0.9, 6.4, 1.6);
-  spotlight.target.position.set(0, 0, 0);
+  spotlight.position.set(heroX, 6.4, heroZ + 1.6);
+  spotlight.target.position.set(heroX, 0, heroZ);
   // Front fill from the camera side so the outer porcelain wall stays visible
   // under the near-vertical key.
   const fillLight = new THREE.SpotLight(0xe8f0f4, fillLightIntensity, 0, 0.5, 0.95, 2);
-  fillLight.position.set(0.5, 2.4, 5.2);
-  fillLight.target.position.set(0, 0.1, 0);
+  fillLight.position.set(heroX, 2.4, heroZ + 5.2);
+  fillLight.target.position.set(heroX, 0.1, heroZ);
   scene.add(spotlight, spotlight.target, fillLight, fillLight.target);
 
   // The world lights start off entirely: only the spotlight touches the frame.
@@ -218,14 +288,21 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
     overlay.classList.add("is-idle");
   }, idleHintDelayMs);
 
-  function setIntroCamera(azimuth: number, pitch: number, distance: number, targetY: number) {
+  function setIntroCamera(
+    azimuth: number,
+    pitch: number,
+    distance: number,
+    targetX: number,
+    targetY: number,
+    targetZ: number,
+  ) {
     const horizontal = Math.cos(pitch) * distance;
     camera.position.set(
-      Math.sin(azimuth) * horizontal,
+      targetX + Math.sin(azimuth) * horizontal,
       targetY + Math.sin(pitch) * distance,
-      Math.cos(azimuth) * horizontal,
+      targetZ + Math.cos(azimuth) * horizontal,
     );
-    camera.lookAt(0, targetY, 0);
+    camera.lookAt(targetX, targetY, targetZ);
     camera.updateMatrixWorld();
   }
 
@@ -379,8 +456,6 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
   }
 
   return {
-    getPinnedBowl: () => (handedOff || finished ? null : hero),
-
     update(delta: number) {
       if (finished) {
         return;
@@ -392,7 +467,7 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
         // Title: hold the close-up with a barely-there breath of motion.
         titleAzimuth = Math.sin(time * 0.16) * titleAzimuthDrift;
         hero.mesh.position.y += Math.sin(time * 0.85) * 0.006;
-        setIntroCamera(titleAzimuth, titlePitch, titleDistance, titleTargetY);
+        setIntroCamera(titleAzimuth, titlePitch, titleDistance, heroX, titleTargetY, heroZ);
         return;
       }
 
@@ -431,7 +506,9 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
           THREE.MathUtils.lerp(strikeAzimuth, 0, cameraEase),
           THREE.MathUtils.lerp(titlePitch, pose.pitch, cameraEase),
           logLerp(titleDistance, pose.distance, cameraEase),
+          heroX * (1 - cameraEase),
           titleTargetY * (1 - cameraEase),
+          heroZ * (1 - cameraEase),
         );
         applyDarkness(smootherstep(exposureProgress));
       }
@@ -441,11 +518,13 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
       }
 
       // The pool stays empty until the camera has settled; only then does the
-      // emergence wave begin.
+      // emergence wave begin, and only once the last bowl has surfaced does
+      // the simulation start.
       if (handedOff) {
         updateEmergence(time - handOffAt);
         if (emergedCount >= emergenceEntries.length) {
           finished = true;
+          deps.bowlSystem.setFrozen(false);
         }
       }
     },
@@ -465,6 +544,7 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
       for (const entry of emergenceEntries) {
         entry.bowl.emergence = 1;
       }
+      deps.bowlSystem.setFrozen(false);
     },
   };
 }
