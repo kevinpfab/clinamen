@@ -38,4 +38,5 @@ export type WaterSimulationUniforms = {
   uImpulseCount: { value: number };
   uDelta: { value: number };
   uWaveKick: { value: number };
+  uWallReflectance: { value: number };
 };

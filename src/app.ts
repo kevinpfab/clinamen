@@ -532,6 +532,10 @@ if (import.meta.env.DEV) {
       setImpactMomentumFloor: (value) => {
         debugSettings.impactMomentumFloor = value;
       },
+      getWallReflectance: () => debugSettings.wallReflectance,
+      setWallReflectance: (value) => {
+        debugSettings.wallReflectance = value;
+      },
       getBowlCount: () => simulationSettings.bowlCount,
       setBowlCount,
       getMinRadius: () => simulationSettings.minRadius,

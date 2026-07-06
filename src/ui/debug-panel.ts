@@ -8,6 +8,8 @@ type DebugPanelDeps = {
   setToneGain: (value: number) => void;
   getImpactMomentumFloor: () => number;
   setImpactMomentumFloor: (value: number) => void;
+  getWallReflectance: () => number;
+  setWallReflectance: (value: number) => void;
   getBowlCount: () => number;
   setBowlCount: (value: number) => void;
   getMinRadius: () => number;
@@ -121,6 +123,18 @@ export function createDebugPanel(deps: DebugPanelDeps) {
     },
   });
 
+  const wallReflectanceSlider = createDebugSlider({
+    label: "Wall reflectance",
+    min: 0,
+    max: 1,
+    step: 0.02,
+    value: deps.getWallReflectance(),
+    format: (value) => `${Math.round(value * 100)}%`,
+    onInput: (value) => {
+      deps.setWallReflectance(value);
+    },
+  });
+
   const countSlider = createDebugSlider({
     label: "Bowls",
     min: 3,
@@ -201,6 +215,7 @@ export function createDebugPanel(deps: DebugPanelDeps) {
     volumeSlider.element,
     toneSlider.element,
     impactFloorSlider.element,
+    wallReflectanceSlider.element,
     countSlider.element,
     minSizeSlider.element,
     maxSizeSlider.element,

@@ -18,6 +18,10 @@ export const debugSettings = {
   masterVolume: 0.88,
   toneGain: 1.35,
   impactMomentumFloor: 0.002,
+  // How much wave energy the basin wall returns (0 = the old fully absorbing
+  // rim, 1 = a hard porcelain wall). Some reflection lets ripples cross and
+  // interfere near the rim instead of dying there.
+  wallReflectance: 0.4,
 };
 
 export const simulationSettings = {

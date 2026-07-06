@@ -1,5 +1,10 @@
 import * as THREE from "three";
-import { maxWaterImpulses, waterSimulationSize, waterWaveSpeed } from "../config";
+import {
+  debugSettings,
+  maxWaterImpulses,
+  waterSimulationSize,
+  waterWaveSpeed,
+} from "../config";
 import { renderer } from "../core/stage";
 import { waterUniforms } from "./uniforms";
 import type { WaterSimulationUniforms } from "./types";
@@ -45,6 +50,7 @@ const waterSimulationUniforms: WaterSimulationUniforms & Record<string, THREE.IU
   uImpulseCount: { value: 0 },
   uDelta: { value: 1 / 60 },
   uWaveKick: { value: 0.64 },
+  uWallReflectance: { value: debugSettings.wallReflectance },
 };
 export const waterSimulationMaterial = new THREE.ShaderMaterial({
   uniforms: waterSimulationUniforms,
@@ -67,6 +73,7 @@ export const waterSimulationMaterial = new THREE.ShaderMaterial({
     uniform int uImpulseCount;
     uniform float uDelta;
     uniform float uWaveKick;
+    uniform float uWallReflectance;
 
     varying vec2 vUv;
 
@@ -153,10 +160,13 @@ export const waterSimulationMaterial = new THREE.ShaderMaterial({
         energy += (core * 0.36 + shoulder * 0.22 + outerTrough * 0.12) * abs(impulse.w);
       }
 
-      velocity -= height * wall * 0.080 * stepScale;
-      velocity *= pow(mix(1.0, 0.70, wall), stepScale);
-      height *= mix(1.0, 0.82, wall * stepScale);
-      energy *= mix(1.0, 0.58, wall * stepScale);
+      // The wall band absorbs incident waves; reflectance dials the
+      // absorption back so part of each wavefront rebounds off the rim and
+      // interferes with later rings instead of dying at the edge.
+      velocity -= height * wall * mix(0.080, 0.028, uWallReflectance) * stepScale;
+      velocity *= pow(mix(1.0, mix(0.70, 0.995, uWallReflectance), wall), stepScale);
+      height *= mix(1.0, mix(0.82, 0.998, uWallReflectance), wall * stepScale);
+      energy *= mix(1.0, mix(0.58, 0.92, uWallReflectance), wall * stepScale);
       foam *= mix(1.0, 0.80, wall * stepScale);
 
       float mask = basinMask(p);
@@ -315,6 +325,11 @@ export function updateWaterSimulation(delta: number) {
     0.5,
   );
   waterSimulationUniforms.uWaveKick.value = courant2 / (0.34 * stepScale * stepScale);
+  waterSimulationUniforms.uWallReflectance.value = THREE.MathUtils.clamp(
+    debugSettings.wallReflectance,
+    0,
+    1,
+  );
   simulationQuad.material = waterSimulationMaterial;
   renderer.setRenderTarget(waterSimWrite);
   renderer.render(simulationScene, simulationCamera);
