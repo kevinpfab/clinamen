@@ -23,7 +23,9 @@ export function addCollisionRipple(
   direction = new THREE.Vector2(1, 0),
   lifetime = 1.75,
 ) {
-  const visualStrength = THREE.MathUtils.clamp(strength, 0.10, 0.88);
+  // The floor of the clamp is low so slow, soft collisions produce
+  // proportionally faint rings instead of a fixed minimum splash.
+  const visualStrength = THREE.MathUtils.clamp(strength, 0.06, 0.88);
   const rippleDirection = direction.lengthSq() > 0.0001
     ? direction.clone().normalize()
     : new THREE.Vector2(1, 0);
@@ -39,24 +41,24 @@ export function addCollisionRipple(
     lastDisturbedAt: -10,
   });
   ripples.splice(maxRipples);
-  queueWaterImpulse(x, z, 0.22 + visualStrength * 0.64, visualStrength * 0.78);
+  queueWaterImpulse(x, z, 0.22 + visualStrength * 0.64, visualStrength * 0.45);
   queueWaterImpulse(
     x - rippleDirection.x * (0.20 + visualStrength * 0.14),
     z - rippleDirection.y * (0.20 + visualStrength * 0.14),
     0.38 + visualStrength * 0.62,
-    -visualStrength * 0.24,
+    -visualStrength * 0.14,
   );
   queueWaterImpulse(
     x + tangent.x * (0.18 + visualStrength * 0.18),
     z + tangent.y * (0.18 + visualStrength * 0.18),
     0.24 + visualStrength * 0.40,
-    visualStrength * 0.12,
+    visualStrength * 0.07,
   );
   queueWaterImpulse(
     x - tangent.x * (0.18 + visualStrength * 0.18),
     z - tangent.y * (0.18 + visualStrength * 0.18),
     0.24 + visualStrength * 0.40,
-    visualStrength * 0.12,
+    visualStrength * 0.07,
   );
 }
 

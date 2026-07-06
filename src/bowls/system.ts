@@ -129,7 +129,7 @@ export class BowlSystem {
           + this.waterSample.height * 0.30 * sizeDamp;
         bowl.visual.rotation.x = this.waterSample.slopeZ * 0.16 * sizeDamp;
         bowl.visual.rotation.z = -this.waterSample.slopeX * 0.16 * sizeDamp;
-        const drift = (delta * 0.06 * sizeDamp) / 1.62;
+        const drift = (delta * 0.022 * sizeDamp) / 1.62;
         bowl.velocity.x += this.waterSample.slopeX * drift;
         bowl.velocity.y += this.waterSample.slopeZ * drift;
       }
