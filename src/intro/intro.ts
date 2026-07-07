@@ -10,6 +10,9 @@ import { getWaterSurfaceRadius } from "../core/world";
 import { pseudoRandom } from "../core/math";
 import type { LightingSystem } from "../core/lighting";
 import { getBowlCenterLimit } from "../bowls/tuning";
+import { createHeroBowlRimGeometry, getBowlRimY } from "../bowls/geometry";
+import { createBowlHeroResonanceMaterial } from "../bowls/materials";
+import { heroBowlRimSegments } from "../config";
 import { waterUniforms } from "../water/uniforms";
 import { triggerBowlResonance } from "../bowls/resonance";
 import type { BowlBody } from "../bowls/types";
@@ -268,6 +271,53 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
   fillLight.target.position.set(heroX, 0.1, heroZ);
   scene.add(spotlight, spotlight.target, fillLight, fillLight.target);
 
+  // The hero's impulse flare gets its own high-resolution rim for the intro
+  // close-up: a lathe that hugs the bowl's rounded lip in 3D rather than the
+  // faceted flat disc the instanced field rims share. It is driven by uniforms
+  // and torn down at hand-off, when the hero rejoins the instanced field.
+  const heroRim = new THREE.Mesh(
+    createHeroBowlRimGeometry(heroBowlRimSegments),
+    createBowlHeroResonanceMaterial(),
+  );
+  heroRim.frustumCulled = false;
+  heroRim.renderOrder = 7;
+  scene.add(heroRim);
+  hero.rimFlareSuppressed = true;
+  let heroRimActive = true;
+
+  function syncHeroRim() {
+    if (!heroRimActive) {
+      return;
+    }
+    heroRim.position.set(
+      hero.mesh.position.x,
+      hero.mesh.position.y + getBowlRimY(hero.radius),
+      hero.mesh.position.z,
+    );
+    heroRim.rotation.set(hero.visual.rotation.x, hero.mesh.rotation.y, hero.visual.rotation.z);
+    heroRim.scale.setScalar(hero.radius);
+    const resonance = hero.resonance;
+    const uniforms = (heroRim.material as THREE.ShaderMaterial).uniforms;
+    uniforms.uRimPulse.value.set(
+      resonance.age,
+      resonance.lifetime,
+      resonance.strength,
+      resonance.toneRatio,
+    );
+    uniforms.uRimImpactDirection.value.copy(resonance.impactDirection);
+  }
+
+  function teardownHeroRim() {
+    if (!heroRimActive) {
+      return;
+    }
+    heroRimActive = false;
+    hero.rimFlareSuppressed = false;
+    scene.remove(heroRim);
+    heroRim.geometry.dispose();
+    (heroRim.material as THREE.ShaderMaterial).dispose();
+  }
+
   // The world lights start off entirely: only the spotlight touches the frame.
   const baseHemisphereIntensity = deps.lighting.hemisphere.intensity;
   const baseKeyIntensity = deps.lighting.key.intensity;
@@ -455,6 +505,7 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
     cameraTarget.set(0, 0, 0);
     applyCameraOrbit();
     restoreLighting();
+    teardownHeroRim();
     document.body.classList.remove("is-intro");
     deps.onComplete();
   }
@@ -504,6 +555,8 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
           hero.visual.rotation.x = Math.sin(sinceHit * 37 + 1.3) * decay * 0.64;
         }
       }
+
+      syncHeroRim();
 
       if (struckAt === null) {
         // Title: hold the close-up with a barely-there breath of motion.
@@ -573,6 +626,7 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
       removeListeners();
       overlay.remove();
       document.body.classList.remove("is-intro");
+      teardownHeroRim();
       if (!handedOff) {
         restoreLighting();
       }

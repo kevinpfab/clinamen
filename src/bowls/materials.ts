@@ -388,36 +388,13 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
   toneMapped: false,
 });
 
-export function createBowlResonanceMaterial() {
-  return new THREE.ShaderMaterial({
-    uniforms: {},
-    vertexShader: `
+// The rim-flare fragment is shared: the instanced field rims feed it per-bowl
+// state through attributes, the hero's intro rim feeds it through uniforms, but
+// the flare itself renders identically.
+const bowlResonanceFragmentShader = `
       precision highp float;
 
-      attribute vec4 aRimPulse;
-      attribute vec2 aRimImpactDirection;
-
-      varying vec2 vRadial;
-      varying float vRadiusBand;
-      varying vec4 vRimPulse;
-      varying vec2 vImpactDirection;
-
-      void main() {
-        vec2 rim = position.xz;
-        float radius = max(length(rim), 0.001);
-        vRadial = rim / radius;
-        vRadiusBand = radius;
-        vRimPulse = aRimPulse;
-        vImpactDirection = aRimImpactDirection;
-        vec4 instancePosition = vec4(position, 1.0);
-        #ifdef USE_INSTANCING
-          instancePosition = instanceMatrix * instancePosition;
-        #endif
-        gl_Position = projectionMatrix * modelViewMatrix * instancePosition;
-      }
-    `,
-    fragmentShader: `
-      precision highp float;
+      uniform vec2 uOuterFeather;
 
       varying vec2 vRadial;
       varying float vRadiusBand;
@@ -460,7 +437,7 @@ export function createBowlResonanceMaterial() {
         float insideDistance = max(1.0 - vRadiusBand, 0.0);
         float rimCore = 1.0 - smoothstep(inwardReach * 0.62, inwardReach, insideDistance);
         float innerFeather = smoothstep(${bowlImpactRimInnerRadius.toFixed(3)}, ${bowlRimInnerFeatherEnd.toFixed(3)}, vRadiusBand);
-        float outerFeather = 1.0 - smoothstep(0.992, 1.000, vRadiusBand);
+        float outerFeather = 1.0 - smoothstep(uOuterFeather.x, uOuterFeather.y, vRadiusBand);
         float shimmer = 0.92
           + sin(atan(vRadial.y, vRadial.x) * 10.0 + age * 8.2 + toneRatio * BASIN_PI) * 0.08;
 
@@ -480,13 +457,88 @@ export function createBowlResonanceMaterial() {
 
         gl_FragColor = vec4(color, clamp(alpha, 0.0, 1.0));
       }
+    `;
+
+const bowlResonanceMaterialSettings: THREE.ShaderMaterialParameters = {
+  transparent: true,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
+  depthTest: true,
+  side: THREE.DoubleSide,
+  toneMapped: false,
+};
+
+export function createBowlResonanceMaterial() {
+  return new THREE.ShaderMaterial({
+    ...bowlResonanceMaterialSettings,
+    // The flat field rims fade at the pool-facing edge, r = 1.
+    uniforms: {
+      uOuterFeather: { value: new THREE.Vector2(0.992, 1.0) },
+    },
+    vertexShader: `
+      precision highp float;
+
+      attribute vec4 aRimPulse;
+      attribute vec2 aRimImpactDirection;
+
+      varying vec2 vRadial;
+      varying float vRadiusBand;
+      varying vec4 vRimPulse;
+      varying vec2 vImpactDirection;
+
+      void main() {
+        vec2 rim = position.xz;
+        float radius = max(length(rim), 0.001);
+        vRadial = rim / radius;
+        vRadiusBand = radius;
+        vRimPulse = aRimPulse;
+        vImpactDirection = aRimImpactDirection;
+        vec4 instancePosition = vec4(position, 1.0);
+        #ifdef USE_INSTANCING
+          instancePosition = instanceMatrix * instancePosition;
+        #endif
+        gl_Position = projectionMatrix * modelViewMatrix * instancePosition;
+      }
     `,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    depthTest: true,
-    side: THREE.DoubleSide,
-    toneMapped: false,
+    fragmentShader: bowlResonanceFragmentShader,
+  });
+}
+
+// The intro's dedicated hero rim is a single non-instanced mesh, so its pulse
+// state arrives as uniforms rather than per-instance attributes.
+export function createBowlHeroResonanceMaterial() {
+  return new THREE.ShaderMaterial({
+    ...bowlResonanceMaterialSettings,
+    uniforms: {
+      uRimPulse: { value: new THREE.Vector4(0, 1, 0, 0) },
+      uRimImpactDirection: { value: new THREE.Vector2(1, 0) },
+      // The hero's 3D band curls past r = 1 over the rounded lip's outer face;
+      // fade further out so that face lights and tapers softly at the edge
+      // rather than being clipped at the pool line.
+      uOuterFeather: { value: new THREE.Vector2(0.996, 1.018) },
+    },
+    vertexShader: `
+      precision highp float;
+
+      uniform vec4 uRimPulse;
+      uniform vec2 uRimImpactDirection;
+
+      varying vec2 vRadial;
+      varying float vRadiusBand;
+      varying vec4 vRimPulse;
+      varying vec2 vImpactDirection;
+
+      void main() {
+        vec2 rim = position.xz;
+        float radius = max(length(rim), 0.001);
+        vRadial = rim / radius;
+        vRadiusBand = radius;
+        vRimPulse = uRimPulse;
+        vImpactDirection = uRimImpactDirection;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: bowlResonanceFragmentShader,
   });
 }
 

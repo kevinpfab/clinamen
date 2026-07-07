@@ -26,10 +26,15 @@ export type BowlBody = {
   angularVelocity: number;
   lastImpactAt: number;
   phase: number;
+  // The intro draws the hero's rim flare with a dedicated high-resolution mesh;
+  // while set, the instanced renderer skips this bowl's rim so the two don't
+  // double-expose the additive glow.
+  rimFlareSuppressed?: boolean;
 };
 
 export type BowlShellProfile = {
   full: THREE.Vector2[];
   outer: THREE.Vector2[];
+  inner: THREE.Vector2[];
   rimY: number;
 };

@@ -136,11 +136,13 @@ export class BowlInstanceRenderer {
         resonance.impactDirection.x,
         resonance.impactDirection.y,
       );
+      // The intro renders the hero's rim flare with a dedicated high-res mesh;
+      // zero this bowl's instanced strength so the two don't stack.
       this.rimPulses.setXYZW(
         index,
         resonance.age,
         resonance.lifetime,
-        resonance.strength,
+        bowl.rimFlareSuppressed ? 0 : resonance.strength,
         resonance.toneRatio,
       );
       this.rimImpactDirections.setXY(

@@ -47,6 +47,10 @@ export const goldenRatio = (1 + Math.sqrt(5)) / 2;
 export const bowlWallStraightness = 0.75;
 export const bowlHeightScale = 1 / goldenRatio;
 export const bowlLatheSegments = 36;
+// The intro's hero bowl gets a far finer rim for its close-up impulse flare, so
+// the traveling wave reads as a smooth circle tracing the rounded lip rather
+// than the faceted 36-gon the instanced field rims share.
+export const heroBowlRimSegments = 200;
 export const bowlShellBottomHeightScale = 0.010;
 export const bowlImpactColorIntensity = isMobilePerformanceTarget ? 1.85 : 1.0;
 export const bowlImpactRimInnerRadius = isMobilePerformanceTarget ? 0.52 : 0.86;
