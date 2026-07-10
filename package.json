@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "gen:assets": "vite --open /tools/asset-generator/index.html",
     "dev:lan": "vite --host 0.0.0.0",
     "dev:tunnel": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",

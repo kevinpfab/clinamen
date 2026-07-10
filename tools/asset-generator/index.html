@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>clinamen · asset generator</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #0b0b0d;
+        color: #e8e6df;
+        font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 24px;
+        padding: 32px 16px 64px;
+        box-sizing: border-box;
+      }
+      h1 {
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        margin: 0;
+      }
+      p.hint {
+        margin: 0;
+        max-width: 640px;
+        text-align: center;
+        color: #9a988f;
+      }
+      .previews {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 32px;
+        justify-content: center;
+        align-items: flex-start;
+      }
+      .card {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        align-items: center;
+      }
+      .card canvas {
+        background: #000;
+        border-radius: 6px;
+        box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+        display: block;
+      }
+      .card .label {
+        color: #9a988f;
+        font-size: 12px;
+      }
+      .card .actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      button {
+        font: inherit;
+        font-size: 12px;
+        color: #e8e6df;
+        background: #1c1c20;
+        border: 1px solid #33333a;
+        border-radius: 5px;
+        padding: 6px 12px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #26262c;
+        border-color: #45454e;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>clinamen · favicon &amp; OG image generator</h1>
+    <p class="hint">
+      Renders a single porcelain bowl on black using the piece's real geometry,
+      material, and lighting. Preview below, then download the PNGs.
+    </p>
+    <div class="previews" id="previews"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

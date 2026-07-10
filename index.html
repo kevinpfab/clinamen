@@ -7,12 +7,54 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <title>clinamen</title>
+    <meta
+      name="description"
+      content="An interactive tribute to Céleste Boursier-Mougenot's clinamen — porcelain bowls drifting on water, sounding microtonal tones as they meet."
+    />
+    <meta name="theme-color" content="#05090c" />
+    <meta name="color-scheme" content="dark" />
+    <!-- Marks are produced by tools/asset-generator (`bun run gen:assets`) and
+         dropped into public/ as the filenames below. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="./favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
+    <!-- Standalone share card. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="clinamen" />
+    <meta
+      property="og:description"
+      content="Porcelain bowls drifting on water, sounding microtonal tones as they meet — a tribute to Céleste Boursier-Mougenot."
+    />
+    <meta property="og:url" content="https://kevinpfab.com/clinamen/" />
+    <meta property="og:image" content="https://kevinpfab.com/clinamen/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="A single porcelain bowl on black — clinamen."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="clinamen" />
+    <meta
+      name="twitter:description"
+      content="Porcelain bowls drifting on water, sounding microtonal tones as they meet — a tribute to Céleste Boursier-Mougenot."
+    />
+    <meta name="twitter:image" content="https://kevinpfab.com/clinamen/og-image.png" />
   </head>
   <body>
     <div id="app"></div>
     <p class="basin-attribution">
       a tribute to "clinamen" by Céleste Boursier-Mougenot
     </p>
+    <!-- Revealed by main.ts if the scene fails to start (e.g. no WebGL). -->
+    <div id="basin-fallback" class="basin-fallback" hidden>
+      <p>This piece needs a browser with WebGL support enabled.</p>
+    </div>
+    <noscript>
+      <div class="basin-fallback basin-fallback--noscript">
+        <p>“clinamen” is an interactive piece that runs on JavaScript. Enable it, or open this page in a modern browser.</p>
+      </div>
+    </noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
