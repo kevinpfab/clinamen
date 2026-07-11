@@ -396,7 +396,7 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
         });
       })
       .catch((error) => {
-        console.error("Microtonal Basin could not start audio.", error);
+        console.error("clinamen could not start audio.", error);
       });
 
     window.clearTimeout(idleTimer);

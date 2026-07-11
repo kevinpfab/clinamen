@@ -64,7 +64,7 @@ export function createStage(): Stage {
 
   const appElement = document.querySelector<HTMLDivElement>("#app");
   if (!appElement) {
-    throw new Error("Microtonal Basin could not find its app container.");
+    throw new Error("clinamen could not find its app container.");
   }
 
   app = appElement;

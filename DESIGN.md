@@ -1,4 +1,4 @@
-# Microtonal Basin Design Document
+# clinamen Design Document
 
 ## Current Implementation Snapshot
 

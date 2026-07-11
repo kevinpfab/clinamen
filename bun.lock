@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "microtonal-basin",
+      "name": "clinamen",
       "dependencies": {
         "three": "latest",
       },

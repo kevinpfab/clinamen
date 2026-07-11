@@ -436,7 +436,7 @@ function handleAudioUnlockGesture() {
   }
 
   void startAudio().catch((error) => {
-    console.error("Microtonal Basin could not start audio.", error);
+    console.error("clinamen could not start audio.", error);
   });
 }
 

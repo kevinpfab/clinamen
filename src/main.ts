@@ -13,10 +13,10 @@ function showFallback() {
 try {
   createStage();
   void import("./app").catch((error) => {
-    console.error("Microtonal Basin could not start.", error);
+    console.error("clinamen could not start.", error);
     showFallback();
   });
 } catch (error) {
-  console.error("Microtonal Basin could not start.", error);
+  console.error("clinamen could not start.", error);
   showFallback();
 }
