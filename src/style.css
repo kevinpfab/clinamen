@@ -74,6 +74,31 @@ body::after {
   }
 }
 
+/* Shown for no-JS visitors (<noscript>) or when the scene fails to start
+   (revealed by main.ts). A calm full-frame message over the pool black. */
+.basin-fallback {
+  position: fixed;
+  z-index: 6;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #05090c;
+  color: rgb(255 255 255 / 78%);
+  font: 500 15px/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
+  text-align: center;
+}
+
+.basin-fallback[hidden] {
+  display: none;
+}
+
+.basin-fallback p {
+  max-width: 34ch;
+  margin: 0;
+}
+
 .basin-attribution {
   position: fixed;
   z-index: 2;
