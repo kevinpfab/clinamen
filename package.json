@@ -11,7 +11,7 @@
     "dev:tunnel": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "lint": "bun run typecheck",
+    "lint": "oxlint && tsc --noEmit",
     "test": "bun test",
     "preview": "vite preview",
     "preview:lan": "vite preview --host 0.0.0.0"
@@ -20,8 +20,10 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
-    "@types/three": "^0.185.1",
+    "@types/bun": "^1.3.14",
+    "@types/three": "^0.185.3",
+    "oxlint": "^1.77.0",
     "typescript": "^7.0.2",
-    "vite": "^8.1.4"
+    "vite": "^8.2.0"
   }
 }

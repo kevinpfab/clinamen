@@ -11,6 +11,12 @@ export type BowlCollisionBody = {
 
 export type BowlContactState = {
   lastSeenAt: number;
+  // Which resolveBowlContacts pass last touched this pair. The broadphase skips
+  // pairs that are obviously apart, so they can no longer clear their own state
+  // — instead every surviving pair is stamped and the leftovers are swept after
+  // the pass. Left optional so callers can seed a map without knowing the
+  // counter; an unstamped entry is simply treated as stale.
+  lastSeenPass?: number;
 };
 
 export type BowlCollisionSettings = {
@@ -44,7 +50,7 @@ export const DEFAULT_BOWL_COLLISION_SETTINGS: BowlCollisionSettings = {
   contactSlop: 0.004,
   releaseDistance: 0.055,
   heightMismatchInset: 0.16,
-  restitution: 0.38,
+  restitution: 0.52,
   correctionPercent: 0.86,
   impactSpeedFloor: 0.004,
 };
@@ -82,6 +88,8 @@ export function getCollisionRippleStrength(
   return clamp(0.10 + Math.sqrt(Math.max(0, contactEnergy)) * 0.22, 0.10, 0.44);
 }
 
+let contactPass = 0;
+
 export function resolveBowlContacts(
   bodies: BowlCollisionBody[],
   contactStates: Map<number, BowlContactState>,
@@ -90,18 +98,34 @@ export function resolveBowlContacts(
 ) {
   const events: BowlCollisionEvent[] = [];
   const iterationCount = Math.max(1, Math.floor(settings.iterations));
+  contactPass += 1;
+  const pass = contactPass;
 
   for (let iteration = 0; iteration < iterationCount; iteration += 1) {
     const emitEvents = iteration === 0;
+    // Broadphase margin. getContactDistance only ever subtracts from
+    // (aRadius + bRadius + contactPadding), so nothing beyond that sum can
+    // overlap. The event-emitting pass looks further out because
+    // updateContactState keeps a separated pair alive across releaseDistance.
+    const rejectMargin = emitEvents
+      ? settings.contactPadding + settings.releaseDistance
+      : settings.contactPadding;
 
     for (let i = 0; i < bodies.length; i += 1) {
       for (let j = i + 1; j < bodies.length; j += 1) {
         const a = bodies[i];
         const b = bodies[j];
-        const contact = measureContact(a, b, settings);
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const rejectDistance = a.contactRadius + b.contactRadius + rejectMargin;
+        if (dx * dx + dz * dz > rejectDistance * rejectDistance) {
+          continue;
+        }
+
+        const contact = measureContact(a, b, dx, dz, settings);
 
         if (emitEvents) {
-          updateContactState(events, contactStates, now, a, b, contact, settings);
+          updateContactState(events, contactStates, now, pass, a, b, contact, settings);
         }
 
         if (contact.overlap <= 0) {
@@ -112,31 +136,47 @@ export function resolveBowlContacts(
         resolveClosingVelocity(a, b, contact.normalX, contact.normalZ, settings);
       }
     }
+
+    if (emitEvents) {
+      pruneReleasedContacts(contactStates, pass);
+    }
   }
 
   return events;
+}
+
+// Any pair the event pass did not stamp is either out of the broadphase radius
+// or past its release band, so its contact is over.
+function pruneReleasedContacts(contactStates: Map<number, BowlContactState>, pass: number) {
+  for (const [key, state] of contactStates) {
+    if (state.lastSeenPass !== pass) {
+      contactStates.delete(key);
+    }
+  }
 }
 
 function updateContactState(
   events: BowlCollisionEvent[],
   contactStates: Map<number, BowlContactState>,
   now: number,
+  pass: number,
   a: BowlCollisionBody,
   b: BowlCollisionBody,
-  contact: ReturnType<typeof measureContact>,
+  contact: ContactMeasurement,
   settings: BowlCollisionSettings,
 ) {
   const key = getBowlPairKey(a.id, b.id);
   const existing = contactStates.get(key);
 
   if (contact.overlap > 0) {
-      if (existing) {
-        existing.lastSeenAt = now;
-      } else {
-        contactStates.set(key, { lastSeenAt: now });
-      }
+    if (existing) {
+      existing.lastSeenAt = now;
+      existing.lastSeenPass = pass;
+      return;
+    }
 
-      if (!existing && contact.closingSpeed >= settings.impactSpeedFloor) {
+    contactStates.set(key, { lastSeenAt: now, lastSeenPass: pass });
+    if (contact.closingSpeed >= settings.impactSpeedFloor) {
       events.push({
         aId: a.id,
         bId: b.id,
@@ -159,47 +199,74 @@ function updateContactState(
     return;
   }
 
+  // Hysteresis: a pair that has drifted apart but is still inside the release
+  // band stays in contact, so resting bowls do not re-trigger an impact every
+  // time they jitter across the contact distance. Anything not stamped here is
+  // swept by pruneReleasedContacts.
   if (existing && contact.distance <= contact.contactDistance + settings.releaseDistance) {
     existing.lastSeenAt = now;
-    return;
+    existing.lastSeenPass = pass;
   }
-
-  contactStates.delete(key);
 }
+
+type ContactMeasurement = {
+  normalX: number;
+  normalZ: number;
+  distance: number;
+  contactDistance: number;
+  overlap: number;
+  relativeSpeed: number;
+  separatingSpeed: number;
+  closingSpeed: number;
+  contactX: number;
+  contactZ: number;
+};
+
+// The pair loop measures thousands of contacts per frame and consumes each one
+// before the next is taken, so measurements are written into a single scratch
+// record rather than allocated.
+const contactMeasurement: ContactMeasurement = {
+  normalX: 0,
+  normalZ: 0,
+  distance: 0,
+  contactDistance: 0,
+  overlap: 0,
+  relativeSpeed: 0,
+  separatingSpeed: 0,
+  closingSpeed: 0,
+  contactX: 0,
+  contactZ: 0,
+};
 
 function measureContact(
   a: BowlCollisionBody,
   b: BowlCollisionBody,
+  dx: number,
+  dz: number,
   settings: BowlCollisionSettings,
-) {
-  const dx = b.x - a.x;
-  const dz = b.z - a.z;
+): ContactMeasurement {
+  const measurement = contactMeasurement;
   const distance = Math.hypot(dx, dz);
-  const { normalX, normalZ } = getContactNormal(a, b, dx, dz, distance);
+  writeContactNormal(measurement, a, b, dx, dz, distance);
+  const { normalX, normalZ } = measurement;
   const contactDistance = getContactDistance(a, b, settings);
-  const overlap = contactDistance - distance;
   const relativeVelocityX = b.vx - a.vx;
   const relativeVelocityZ = b.vz - a.vz;
-  const relativeSpeed = Math.hypot(relativeVelocityX, relativeVelocityZ);
   const separatingSpeed = relativeVelocityX * normalX + relativeVelocityZ * normalZ;
-  const closingSpeed = Math.max(0, -separatingSpeed);
   const aContactX = a.x + normalX * a.contactRadius;
   const aContactZ = a.z + normalZ * a.contactRadius;
   const bContactX = b.x - normalX * b.contactRadius;
   const bContactZ = b.z - normalZ * b.contactRadius;
 
-  return {
-    normalX,
-    normalZ,
-    distance,
-    contactDistance,
-    overlap,
-    relativeSpeed,
-    separatingSpeed,
-    closingSpeed,
-    contactX: (aContactX + bContactX) * 0.5,
-    contactZ: (aContactZ + bContactZ) * 0.5,
-  };
+  measurement.distance = distance;
+  measurement.contactDistance = contactDistance;
+  measurement.overlap = contactDistance - distance;
+  measurement.relativeSpeed = Math.hypot(relativeVelocityX, relativeVelocityZ);
+  measurement.separatingSpeed = separatingSpeed;
+  measurement.closingSpeed = Math.max(0, -separatingSpeed);
+  measurement.contactX = (aContactX + bContactX) * 0.5;
+  measurement.contactZ = (aContactZ + bContactZ) * 0.5;
+  return measurement;
 }
 
 function getContactDistance(
@@ -268,7 +335,8 @@ function resolveClosingVelocity(
   }
 }
 
-function getContactNormal(
+function writeContactNormal(
+  target: ContactMeasurement,
   a: BowlCollisionBody,
   b: BowlCollisionBody,
   dx: number,
@@ -276,27 +344,23 @@ function getContactNormal(
   distance: number,
 ) {
   if (distance > epsilon) {
-    return {
-      normalX: dx / distance,
-      normalZ: dz / distance,
-    };
+    target.normalX = dx / distance;
+    target.normalZ = dz / distance;
+    return;
   }
 
   const relativeVelocityX = b.vx - a.vx;
   const relativeVelocityZ = b.vz - a.vz;
   const relativeSpeed = Math.hypot(relativeVelocityX, relativeVelocityZ);
   if (relativeSpeed > epsilon) {
-    return {
-      normalX: relativeVelocityX / relativeSpeed,
-      normalZ: relativeVelocityZ / relativeSpeed,
-    };
+    target.normalX = relativeVelocityX / relativeSpeed;
+    target.normalZ = relativeVelocityZ / relativeSpeed;
+    return;
   }
 
   const angle = ((a.id * 12.9898 + b.id * 78.233) % 1) * Math.PI * 2;
-  return {
-    normalX: Math.cos(angle),
-    normalZ: Math.sin(angle),
-  };
+  target.normalX = Math.cos(angle);
+  target.normalZ = Math.sin(angle);
 }
 
 function clamp(value: number, min: number, max: number) {

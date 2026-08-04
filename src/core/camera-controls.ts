@@ -1,19 +1,12 @@
 import * as THREE from "three";
-import { camera, cameraTarget } from "./stage";
 import { isMobilePerformanceTarget } from "../config";
 import type { CameraOrbitState } from "../input/types";
 
-// Orbit camera state and the math that frames the pool responsively. Pointer and
-// pinch handlers mutate cameraOrbit and call applyCameraOrbit to recompute the view.
-export const cameraOrbit: CameraOrbitState = {
-  azimuth: 0,
-  pitch: 0.60,
-  distance: 17.4,
-  minDistance: 7,
-  maxDistance: 36,
-  minPitch: 0.12,
-  maxPitch: 1.46,
-  hasUserControl: false,
+// Orbit camera state and the math that frames the pool responsively. Pointer
+// and pinch handlers mutate `orbit` and call `apply()` to recompute the view.
+export type CameraControls = {
+  orbit: CameraOrbitState;
+  apply: () => void;
 };
 
 export function getResponsiveCameraDefaults(aspect: number) {
@@ -50,13 +43,32 @@ export function getPoolFitDistance(radius: number, fovDeg: number, aspect: numbe
   return (radius * margin) / Math.sin(halfAngle);
 }
 
-export function applyCameraOrbit() {
-  const horizontalDistance = Math.cos(cameraOrbit.pitch) * cameraOrbit.distance;
-  camera.position.set(
-    cameraTarget.x + Math.sin(cameraOrbit.azimuth) * horizontalDistance,
-    cameraTarget.y + Math.sin(cameraOrbit.pitch) * cameraOrbit.distance,
-    cameraTarget.z + Math.cos(cameraOrbit.azimuth) * horizontalDistance,
-  );
-  camera.lookAt(cameraTarget);
-  camera.updateMatrixWorld();
+export function createCameraControls(
+  camera: THREE.PerspectiveCamera,
+  target: THREE.Vector3,
+): CameraControls {
+  const orbit: CameraOrbitState = {
+    azimuth: 0,
+    pitch: 0.60,
+    distance: 17.4,
+    minDistance: 7,
+    maxDistance: 36,
+    minPitch: 0.12,
+    maxPitch: 1.46,
+    hasUserControl: false,
+  };
+
+  return {
+    orbit,
+    apply() {
+      const horizontalDistance = Math.cos(orbit.pitch) * orbit.distance;
+      camera.position.set(
+        target.x + Math.sin(orbit.azimuth) * horizontalDistance,
+        target.y + Math.sin(orbit.pitch) * orbit.distance,
+        target.z + Math.cos(orbit.azimuth) * horizontalDistance,
+      );
+      camera.lookAt(target);
+      camera.updateMatrixWorld();
+    },
+  };
 }

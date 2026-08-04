@@ -1,13 +1,12 @@
 import * as THREE from "three";
-import { waterUniforms } from "./uniforms";
 
-// A tiling value-noise texture shared by the full-screen water and floor
-// shaders. They previously evaluated hash-sin value noise in ALU a dozen
-// times per pixel; a small repeating texture lookup is cheaper (especially
-// on mobile GPUs) and avoids the sin-hash precision artifacts some drivers
-// show at large arguments. The bake matches the old function: unit lattice,
-// smoothstep interpolation, sampled in the shader as noise(p) =
-// texture(uNoiseMap, p / NOISE_PERIOD).
+// A tiling value-noise texture shared by every shader in the piece — the water
+// surface, the basin floor, and the interaction field. They previously
+// evaluated hash-sin value noise in ALU a dozen times per pixel; a small
+// repeating texture lookup is cheaper (especially on mobile GPUs) and avoids
+// the sin-hash precision artifacts some drivers show at large arguments. The
+// bake matches the old function: unit lattice, smoothstep interpolation,
+// sampled in the shader as noise(p) = texture(uNoiseMap, p / NOISE_PERIOD).
 const noiseTextureSize = 256;
 
 // The world-space repeat length of the noise, in old-valueNoise argument
@@ -35,7 +34,7 @@ function bakedValueNoise(x: number, y: number, seed: number) {
   return THREE.MathUtils.lerp(THREE.MathUtils.lerp(a, b, ux), THREE.MathUtils.lerp(c, d, ux), uy);
 }
 
-function createNoiseTexture() {
+export function createNoiseTexture() {
   const data = new Uint8Array(noiseTextureSize * noiseTextureSize * 4);
   const texelToNoise = noisePeriod / noiseTextureSize;
 
@@ -65,11 +64,4 @@ function createNoiseTexture() {
   texture.needsUpdate = true;
   texture.name = "Basin tiling value noise";
   return texture;
-}
-
-export const noiseTexture = createNoiseTexture();
-waterUniforms.uNoiseMap.value = noiseTexture;
-
-export function disposeNoiseTexture() {
-  noiseTexture.dispose();
 }

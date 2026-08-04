@@ -119,7 +119,7 @@ export function createFlowShapeControl(deps: FlowShapeControlDeps) {
   updateBowlCountControl(deps.getBowlCount);
 
   return {
-    destroy() {
+    dispose() {
       control.remove();
       flowShapeButtons.length = 0;
       bowlCountButtons.length = 0;

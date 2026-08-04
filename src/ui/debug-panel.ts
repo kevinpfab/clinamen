@@ -75,9 +75,13 @@ function isMobileDevice() {
   );
 }
 
-export function createDebugPanel(deps: DebugPanelDeps) {
+export type DebugPanel = {
+  dispose: () => void;
+};
+
+export function createDebugPanel(deps: DebugPanelDeps): DebugPanel {
   if (!import.meta.env.DEV || isMobileDevice()) {
-    return;
+    return { dispose() {} };
   }
 
   const panel = document.createElement("section");
@@ -224,7 +228,7 @@ export function createDebugPanel(deps: DebugPanelDeps) {
   document.body.append(panel);
 
   return {
-    destroy() {
+    dispose() {
       panel.remove();
     },
   };

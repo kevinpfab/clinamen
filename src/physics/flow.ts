@@ -103,6 +103,164 @@ function setCurrentSample(
   return out;
 }
 
+// Every shape opens and closes the same way: normalize the sample point
+// against the pool, fade out across the rim, accumulate a velocity, then stir
+// in the eddy field and slow the result by the bowl drag. Only the middle —
+// the channels and jets that give a shape its character — differs.
+//
+// The frame is module state reused across calls: sampling runs per bowl per
+// frame and this is a hot path. Nothing here yields, so there is one sample in
+// flight at a time.
+const flowFrame = {
+  radius: 0,
+  nx: 0,
+  ny: 0,
+  radialDistance: 0,
+  insideMask: 0,
+  bowlDrag: 0,
+  x: 0,
+  y: 0,
+};
+
+// The eddy pair is shared; how strongly each axis reads it is not.
+const WAKE_EDDY_MIX = {
+  primaryX: 0.72,
+  secondaryX: 0.28,
+  secondaryY: 0.64,
+  primaryY: -0.22,
+};
+
+type EddyMix = typeof WAKE_EDDY_MIX;
+
+const SINGULARITY_EDDY_MIX: EddyMix = {
+  primaryX: 0.66,
+  secondaryX: 0.24,
+  secondaryY: 0.58,
+  primaryY: -0.18,
+};
+
+// Returns false when the point is outside the basin, in which case the caller
+// has nothing to do but report stillness.
+function beginFlowSample(
+  point: FlowPoint,
+  poolRadius: number,
+  bowlRadius: number,
+  maskStart: number,
+  maskEnd: number,
+) {
+  const radius = Math.max(poolRadius, 0.001);
+  flowFrame.radius = radius;
+  flowFrame.nx = point.x / radius;
+  flowFrame.ny = point.y / radius;
+  flowFrame.radialDistance = Math.hypot(flowFrame.nx, flowFrame.ny);
+  flowFrame.insideMask = 1 - smoothstep(maskStart, maskEnd, flowFrame.radialDistance);
+  flowFrame.bowlDrag = clamp(1.12 - bowlRadius * 0.44, 0.76, 1.04);
+  flowFrame.x = 0;
+  flowFrame.y = 0;
+  return flowFrame.insideMask > 0;
+}
+
+// Two crossed sine fields keep the current from reading as a static vector
+// field; the basin edge and the bowl drag then damp the whole sample.
+function endFlowSample(
+  elapsed: number,
+  eddyStrength: number,
+  mix: EddyMix,
+  centerChannel: number,
+  rimChannel: number,
+  out: BasinCurrentSample,
+): BasinCurrentSample {
+  const { nx, ny, insideMask, bowlDrag } = flowFrame;
+  const eddyA = Math.sin((nx * 2.35 - ny * 1.75) * TAU + elapsed * 0.31);
+  const eddyB = Math.cos((nx * 1.15 + ny * 2.60) * TAU - elapsed * 0.27);
+  const strength = eddyStrength * insideMask;
+  const damping = insideMask * bowlDrag;
+  const x = (flowFrame.x + (eddyA * mix.primaryX + eddyB * mix.secondaryX) * strength) * damping;
+  const y = (flowFrame.y + (eddyB * mix.secondaryY + eddyA * mix.primaryY) * strength) * damping;
+
+  return setCurrentSample(
+    out,
+    x,
+    y,
+    clamp(Math.hypot(x, y) / 0.090, 0, 1),
+    clamp(centerChannel, 0, 1),
+    clamp(rimChannel, 0, 1),
+  );
+}
+
+// A ring of wall nozzles, each a downstream plume with a slow pulse. The ring
+// and singularity shapes differ only in where the nozzles aim and how far the
+// plumes carry.
+type WallJetField = {
+  angles: readonly number[];
+  jetDirection: (sourceX: number, sourceY: number) => FlowPoint;
+  downstreamStart: number;
+  downstreamEnd: number;
+  plumeWidth: number;
+  plumeReach: number;
+  speed: number;
+  pulseBase: number;
+  pulseRate: number;
+  pulseStep: number;
+};
+
+function addWallJets(field: WallJetField, elapsed: number, gate: number) {
+  const { nx, ny } = flowFrame;
+
+  for (let i = 0; i < field.angles.length; i += 1) {
+    const angle = field.angles[i];
+    const sourceX = Math.cos(angle) * WALL_JET_RADIUS_RATIO;
+    const sourceY = Math.sin(angle) * WALL_JET_RADIUS_RATIO;
+    const direction = field.jetDirection(sourceX, sourceY);
+    const crossX = -direction.y;
+    const crossY = direction.x;
+    const offsetX = nx - sourceX;
+    const offsetY = ny - sourceY;
+    const along = offsetX * direction.x + offsetY * direction.y;
+    const across = offsetX * crossX + offsetY * crossY;
+    const downstream = smoothstep(field.downstreamStart, field.downstreamEnd, along);
+    const plume = downstream
+      * gaussian(across, field.plumeWidth)
+      * Math.exp(-Math.max(along, 0) / field.plumeReach)
+      * flowFrame.insideMask
+      * gate;
+    const pulse = field.pulseBase + Math.sin(elapsed * field.pulseRate + i * field.pulseStep) * 0.10;
+
+    flowFrame.x += direction.x * plume * field.speed * pulse;
+    flowFrame.y += direction.y * plume * field.speed * pulse;
+  }
+}
+
+const RING_WALL_JETS: WallJetField = {
+  angles: RING_JET_ANGLES,
+  jetDirection: (sourceX, sourceY) => {
+    const radial = normalizedDirection(sourceX, sourceY);
+    return ringJetDirection(radial.x, radial.y);
+  },
+  downstreamStart: -0.018,
+  downstreamEnd: 0.090,
+  plumeWidth: 0.115,
+  plumeReach: 0.58,
+  speed: 0.064,
+  pulseBase: 0.84,
+  pulseRate: 0.46,
+  pulseStep: 0.91,
+};
+
+const SINGULARITY_WALL_JETS: WallJetField = {
+  angles: SINGULARITY_JET_ANGLES,
+  jetDirection: (sourceX, sourceY) => normalizedDirection(-sourceX, -sourceY),
+  downstreamStart: -0.016,
+  downstreamEnd: 0.082,
+  plumeWidth: 0.118,
+  plumeReach: 0.70,
+  speed: 0.060,
+  pulseBase: 0.86,
+  pulseRate: 0.52,
+  pulseStep: 0.83,
+};
+
+// Two wall arcs feeding a center channel that runs the length of the basin.
 function sampleCenteredCurrent(
   point: FlowPoint,
   poolRadius: number,
@@ -110,17 +268,11 @@ function sampleCenteredCurrent(
   elapsed: number,
   out: BasinCurrentSample,
 ): BasinCurrentSample {
-  const radius = Math.max(poolRadius, 0.001);
-  const nx = point.x / radius;
-  const ny = point.y / radius;
-  const radialDistance = Math.hypot(nx, ny);
-  const insideMask = 1 - smoothstep(0.97, 1.05, radialDistance);
-
-  if (insideMask <= 0) {
+  if (!beginFlowSample(point, poolRadius, bowlRadius, 0.97, 1.05)) {
     return setCurrentSample(out, 0, 0, 0, 0, 0);
   }
 
-  const bowlDrag = clamp(1.12 - bowlRadius * 0.44, 0.76, 1.04);
+  const { radius, nx, ny, radialDistance } = flowFrame;
   const centerWidth = 0.205 + clamp(bowlRadius / radius, 0, 0.12) * 0.72;
   const centerChannel = gaussian(nx, centerWidth)
     * (1 - smoothstep(0.64, 0.98, radialDistance))
@@ -142,40 +294,29 @@ function sampleCenteredCurrent(
   const bottomReturn = gaussian(ny - 0.80, 0.26) * rimChannel;
   const inward = normalizedDirection(-nx, -ny);
 
-  let x = 0;
-  let y = 0;
+  flowFrame.x += tangent.x * rimChannel * 0.066;
+  flowFrame.y += tangent.y * rimChannel * 0.066;
 
-  x += tangent.x * rimChannel * 0.066;
-  y += tangent.y * rimChannel * 0.066;
+  flowFrame.x += sideSign * topSplit * 0.052;
+  flowFrame.y += topSplit * 0.016;
 
-  x += sideSign * topSplit * 0.052;
-  y += topSplit * 0.016;
+  flowFrame.x += inward.x * bottomReturn * 0.060;
+  flowFrame.y += (inward.y * 0.42 - 0.58) * bottomReturn * 0.060;
 
-  x += inward.x * bottomReturn * 0.060;
-  y += (inward.y * 0.42 - 0.58) * bottomReturn * 0.060;
+  flowFrame.y += -centerChannel * 0.078;
+  flowFrame.y += -bottomJet * 0.032;
 
-  y += -centerChannel * 0.078;
-  y += -bottomJet * 0.032;
-
-  const eddyA = Math.sin((nx * 2.35 - ny * 1.75) * TAU + elapsed * 0.31);
-  const eddyB = Math.cos((nx * 1.15 + ny * 2.60) * TAU - elapsed * 0.27);
-  const eddyStrength = (0.0018 + rimChannel * 0.0042 + centerChannel * 0.0024) * insideMask;
-  x += (eddyA * 0.72 + eddyB * 0.28) * eddyStrength;
-  y += (eddyB * 0.64 - eddyA * 0.22) * eddyStrength;
-
-  x *= insideMask * bowlDrag;
-  y *= insideMask * bowlDrag;
-
-  return setCurrentSample(
+  return endFlowSample(
+    elapsed,
+    0.0018 + rimChannel * 0.0042 + centerChannel * 0.0024,
+    WAKE_EDDY_MIX,
+    centerChannel + bottomJet * 0.48,
+    rimChannel + topSplit * 0.55 + bottomReturn * 0.40,
     out,
-    x,
-    y,
-    clamp(Math.hypot(x, y) / 0.090, 0, 1),
-    clamp(centerChannel + bottomJet * 0.48, 0, 1),
-    clamp(rimChannel + topSplit * 0.55 + bottomReturn * 0.40, 0, 1),
   );
 }
 
+// A wall-jet ring that spins the whole basin around its center.
 function sampleRingCurrent(
   point: FlowPoint,
   poolRadius: number,
@@ -183,17 +324,11 @@ function sampleRingCurrent(
   elapsed: number,
   out: BasinCurrentSample,
 ): BasinCurrentSample {
-  const radius = Math.max(poolRadius, 0.001);
-  const nx = point.x / radius;
-  const ny = point.y / radius;
-  const radialDistance = Math.hypot(nx, ny);
-  const insideMask = 1 - smoothstep(0.96, 1.05, radialDistance);
-
-  if (insideMask <= 0) {
+  if (!beginFlowSample(point, poolRadius, bowlRadius, 0.96, 1.05)) {
     return setCurrentSample(out, 0, 0, 0, 0, 0);
   }
 
-  const bowlDrag = clamp(1.12 - bowlRadius * 0.44, 0.76, 1.04);
+  const { radius, nx, ny, radialDistance, insideMask } = flowFrame;
   const radial = normalizedDirection(nx, ny);
   const tangent = { x: -radial.y, y: radial.x };
   const centerWidth = 0.24 + clamp(bowlRadius / radius, 0, 0.12) * 0.58;
@@ -204,55 +339,24 @@ function sampleRingCurrent(
   const midChannel = smoothstep(0.16, 0.54, radialDistance)
     * (1 - smoothstep(0.78, 0.98, radialDistance));
 
-  let x = 0;
-  let y = 0;
+  flowFrame.x += tangent.x * (rimChannel * 0.074 + midChannel * 0.032 + centerChannel * 0.014);
+  flowFrame.y += tangent.y * (rimChannel * 0.074 + midChannel * 0.032 + centerChannel * 0.014);
+  flowFrame.x -= radial.x * rimChannel * 0.010;
+  flowFrame.y -= radial.y * rimChannel * 0.010;
 
-  x += tangent.x * (rimChannel * 0.074 + midChannel * 0.032 + centerChannel * 0.014);
-  y += tangent.y * (rimChannel * 0.074 + midChannel * 0.032 + centerChannel * 0.014);
-  x -= radial.x * rimChannel * 0.010;
-  y -= radial.y * rimChannel * 0.010;
+  addWallJets(RING_WALL_JETS, elapsed, 1);
 
-  for (let i = 0; i < RING_JET_ANGLES.length; i += 1) {
-    const angle = RING_JET_ANGLES[i];
-    const sourceX = Math.cos(angle) * WALL_JET_RADIUS_RATIO;
-    const sourceY = Math.sin(angle) * WALL_JET_RADIUS_RATIO;
-    const sourceRadial = normalizedDirection(sourceX, sourceY);
-    const direction = ringJetDirection(sourceRadial.x, sourceRadial.y);
-    const cross = { x: -direction.y, y: direction.x };
-    const offsetX = nx - sourceX;
-    const offsetY = ny - sourceY;
-    const along = offsetX * direction.x + offsetY * direction.y;
-    const across = offsetX * cross.x + offsetY * cross.y;
-    const downstream = smoothstep(-0.018, 0.090, along);
-    const plume = downstream
-      * gaussian(across, 0.115)
-      * Math.exp(-Math.max(along, 0) / 0.58)
-      * insideMask;
-    const pulse = 0.84 + Math.sin(elapsed * 0.46 + i * 0.91) * 0.10;
-
-    x += direction.x * plume * 0.064 * pulse;
-    y += direction.y * plume * 0.064 * pulse;
-  }
-
-  const eddyA = Math.sin((nx * 2.35 - ny * 1.75) * TAU + elapsed * 0.31);
-  const eddyB = Math.cos((nx * 1.15 + ny * 2.60) * TAU - elapsed * 0.27);
-  const eddyStrength = (0.0018 + rimChannel * 0.0042 + centerChannel * 0.0024) * insideMask;
-  x += (eddyA * 0.72 + eddyB * 0.28) * eddyStrength;
-  y += (eddyB * 0.64 - eddyA * 0.22) * eddyStrength;
-
-  x *= insideMask * bowlDrag;
-  y *= insideMask * bowlDrag;
-
-  return setCurrentSample(
+  return endFlowSample(
+    elapsed,
+    0.0018 + rimChannel * 0.0042 + centerChannel * 0.0024,
+    WAKE_EDDY_MIX,
+    centerChannel + midChannel * 0.32,
+    rimChannel,
     out,
-    x,
-    y,
-    clamp(Math.hypot(x, y) / 0.090, 0, 1),
-    clamp(centerChannel + midChannel * 0.32, 0, 1),
-    clamp(rimChannel, 0, 1),
   );
 }
 
+// Wall jets aimed at the center, where the intake swallows them.
 function sampleSingularityCurrent(
   point: FlowPoint,
   poolRadius: number,
@@ -260,17 +364,11 @@ function sampleSingularityCurrent(
   elapsed: number,
   out: BasinCurrentSample,
 ): BasinCurrentSample {
-  const radius = Math.max(poolRadius, 0.001);
-  const nx = point.x / radius;
-  const ny = point.y / radius;
-  const radialDistance = Math.hypot(nx, ny);
-  const insideMask = 1 - smoothstep(0.97, 1.05, radialDistance);
-
-  if (insideMask <= 0) {
+  if (!beginFlowSample(point, poolRadius, bowlRadius, 0.97, 1.05)) {
     return setCurrentSample(out, 0, 0, 0, 0, 0);
   }
 
-  const bowlDrag = clamp(1.12 - bowlRadius * 0.44, 0.76, 1.04);
+  const { radius, nx, ny, radialDistance, insideMask } = flowFrame;
   const radial = normalizedDirection(nx, ny);
   const centerChannel = gaussian(radialDistance, 0.25 + clamp(bowlRadius / radius, 0, 0.12) * 0.58);
   const rimChannel = smoothstep(0.46, 0.80, radialDistance)
@@ -282,47 +380,18 @@ function sampleSingularityCurrent(
   const centerSoftening = smoothstep(0.06, 0.22, radialDistance);
   const inwardSpeed = (rimChannel * 0.060 + intakeChannel * 0.056 + centerChannel * 0.014) * centerSoftening;
 
-  let x = -radial.x * inwardSpeed;
-  let y = -radial.y * inwardSpeed;
+  flowFrame.x = -radial.x * inwardSpeed;
+  flowFrame.y = -radial.y * inwardSpeed;
 
-  for (let i = 0; i < SINGULARITY_JET_ANGLES.length; i += 1) {
-    const angle = SINGULARITY_JET_ANGLES[i];
-    const sourceX = Math.cos(angle) * WALL_JET_RADIUS_RATIO;
-    const sourceY = Math.sin(angle) * WALL_JET_RADIUS_RATIO;
-    const direction = normalizedDirection(-sourceX, -sourceY);
-    const cross = { x: -direction.y, y: direction.x };
-    const offsetX = nx - sourceX;
-    const offsetY = ny - sourceY;
-    const along = offsetX * direction.x + offsetY * direction.y;
-    const across = offsetX * cross.x + offsetY * cross.y;
-    const downstream = smoothstep(-0.016, 0.082, along);
-    const plume = downstream
-      * gaussian(across, 0.118)
-      * Math.exp(-Math.max(along, 0) / 0.70)
-      * insideMask
-      * centerSoftening;
-    const pulse = 0.86 + Math.sin(elapsed * 0.52 + i * 0.83) * 0.10;
+  addWallJets(SINGULARITY_WALL_JETS, elapsed, centerSoftening);
 
-    x += direction.x * plume * 0.060 * pulse;
-    y += direction.y * plume * 0.060 * pulse;
-  }
-
-  const eddyA = Math.sin((nx * 2.35 - ny * 1.75) * TAU + elapsed * 0.31);
-  const eddyB = Math.cos((nx * 1.15 + ny * 2.60) * TAU - elapsed * 0.27);
-  const eddyStrength = (0.0014 + rimChannel * 0.0028 + intakeChannel * 0.0018) * insideMask;
-  x += (eddyA * 0.66 + eddyB * 0.24) * eddyStrength;
-  y += (eddyB * 0.58 - eddyA * 0.18) * eddyStrength;
-
-  x *= insideMask * bowlDrag;
-  y *= insideMask * bowlDrag;
-
-  return setCurrentSample(
+  return endFlowSample(
+    elapsed,
+    0.0014 + rimChannel * 0.0028 + intakeChannel * 0.0018,
+    SINGULARITY_EDDY_MIX,
+    centerChannel + intakeChannel * 0.36,
+    rimChannel + intakeChannel * 0.20,
     out,
-    x,
-    y,
-    clamp(Math.hypot(x, y) / 0.090, 0, 1),
-    clamp(centerChannel + intakeChannel * 0.36, 0, 1),
-    clamp(rimChannel + intakeChannel * 0.20, 0, 1),
   );
 }
 

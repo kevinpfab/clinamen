@@ -34,7 +34,7 @@ const unsupportedGpuTiming: GpuTimingSnapshot = {
   sampleCount: 0,
 };
 
-export class GpuFrameTimer {
+class GpuFrameTimer {
   private readonly gl: WebGL2RenderingContext | null;
   private readonly extension: DisjointTimerQueryWebGL2 | null;
   private readonly pendingQueries: PendingGpuQuery[] = [];

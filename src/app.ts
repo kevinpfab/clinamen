@@ -1,71 +1,58 @@
 import * as THREE from "three";
 import {
-  debugSettings,
   rendererPixelRatioLimit,
-  simulationSettings,
   waterSimulationMaxSubsteps,
   waterSimulationStep,
-  world,
 } from "./config";
-import { camera, clock, disposeStage, renderer, scene } from "./core/stage";
+import { debugSettings, simulationSettings, world } from "./settings";
+import type { Stage } from "./core/stage";
 import { getWaterSurfaceRadius } from "./core/world";
 import {
-  applyCameraOrbit,
-  cameraOrbit,
+  createCameraControls,
   getPoolFitDistance,
   getResponsiveCameraDefaults,
 } from "./core/camera-controls";
-import { waterUniforms } from "./water/uniforms";
-import { disposeWaterSurface, water } from "./water/surface";
-import {
-  clearWaterSimulation,
-  disposeWaterSimulation,
-  updateWaterSimulation,
-} from "./water/simulation";
-import {
-  createCircularWoodFloorGeometry,
-  disposeWoodFloor,
-  woodFloor,
-} from "./environment/wood-floor";
-import { basinFloor, disposeBasinFloor } from "./environment/basin-floor";
-import {
-  disposeFlowJets,
-  emitFlowJetImpulses,
-  flowJetAerationUniforms,
-  resetFlowJetTiming,
-  updateFlowJetState,
-} from "./environment/flow-jets";
+import { createWaterUniforms } from "./water/uniforms";
+import { createNoiseTexture } from "./water/noise-texture";
+import { createWaterSurface } from "./water/surface";
+import { createWaterSimulation } from "./water/simulation";
+import { createWoodFloor } from "./environment/wood-floor";
+import { createBasinFloor } from "./environment/basin-floor";
+import { createFlowJets } from "./environment/flow-jets";
 import { createFlowShapeControl } from "./ui/flow-shape-control";
-import {
-  createFpsCounter,
-  type FpsCounter,
-  type FpsCounterDiagnostics,
-} from "./ui/fps-counter";
+import { createFpsCounter } from "./ui/fps-counter";
 import { createIntroSequence, type IntroSequence } from "./intro/intro";
 import { createLighting } from "./core/lighting";
-import { disposeBowlSharedMaterials } from "./bowls/materials";
-import { addCollisionRipple, updateRipples } from "./water/ripples";
-import { disposeBowlField, updateBowlField } from "./water/bowl-field";
-import { disposeInteractionField, updateInteractionField } from "./water/interaction-field";
-import { disposeWaveState, updateWaveState } from "./water/wave-state";
-import { disposeNoiseTexture } from "./water/noise-texture";
-import { BasinAudio } from "./audio/basin-audio";
+import { createBowlMaterials } from "./bowls/materials";
+import { createRippleField } from "./water/ripples";
+import { createBowlField } from "./water/bowl-field";
+import { createInteractionField } from "./water/interaction-field";
+import { createWaveState } from "./water/wave-state";
+import { createBasinAudio, type BasinAudio } from "./audio/basin-audio";
 import { EventBus, type BasinEvents } from "./core/events";
-import { createGpuFrameTimer, type GpuTimingSnapshot } from "./core/gpu-timer";
-import { BowlSystem } from "./bowls/system";
+import { createFrameDiagnostics, frameDiagnosticsEnabled } from "./core/frame-diagnostics";
+import { createBowlSystem } from "./bowls/system";
 import { createPointerController, type PointerController } from "./input/pointer-controller";
 import type { FlowShape } from "./physics/flow";
 
-const bus = new EventBus<BasinEvents>();
-const bowlSystem = new BowlSystem(bus);
-const lighting = createLighting();
-let pointerController: PointerController | null = null;
-let intro: IntroSequence | null = null;
-let audioEngine: BasinAudio | null = null;
-let audioStartPromise: Promise<void> | null = null;
-let animationFrame = 0;
-let waterSimulationAccumulator = 0;
-let disposed = false;
+// The composition root. Everything with a lifetime is built here from the
+// Stage and torn down in one pass, so a hot reload, a context-loss rebuild, and
+// a page unload all follow the same path.
+export type BasinApp = {
+  dispose: () => void;
+};
+
+export type CreateAppOptions = {
+  // Skip the title sequence and hand control straight to the pointer. Used by
+  // the ?skipIntro dev flag and by a WebGL context-loss rebuild, where sitting
+  // the viewer through the reveal a second time would be absurd.
+  skipIntro?: boolean;
+};
+
+// Anything with a dispose() the app owns. Built in dependency order and torn
+// down in reverse — this list is the whole teardown.
+type Disposable = { dispose: () => void };
+
 // The sim always integrates fixed 1/60 steps; slower devices catch up with
 // extra substeps instead of larger steps, which would change wave speed and
 // damping (a 1/30 step used to hit the shader's stepScale clamp and run the
@@ -73,519 +60,435 @@ let disposed = false;
 const waterSimulationFixedStep = waterSimulationStep;
 const maxWaterSimulationSubsteps = waterSimulationMaxSubsteps;
 
-const frameDiagnosticsEnabled = import.meta.env.DEV;
-const gpuFrameTimer = frameDiagnosticsEnabled ? createGpuFrameTimer(renderer) : null;
-let fpsCounter: FpsCounter | null = null;
-const slowFrameRafThresholdMs = 25;
-const slowFrameWorkThresholdMs = 12;
-const slowFrameGpuThresholdMs = 12;
-const frameDiagnosticsLogIntervalMs = 500;
-let lastAnimationFrameAt = performance.now();
-let lastFrameDiagnosticsLogAt = 0;
-let suppressedFrameDiagnosticCount = 0;
+export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinApp {
+  const { camera, clock, renderer, scene } = stage;
+  const disposables: Disposable[] = [];
 
-type Destroyable = {
-  destroy: () => void;
-};
-
-type DisposeAppOptions = {
-  disposeSharedResources?: boolean;
-};
-
-type FrameStepTimings = {
-  bowls: number;
-  collisions: number;
-  ripples: number;
-  resonance: number;
-  instances: number;
-  bowlField: number;
-  interactionField: number;
-  flowImpulses: number;
-  waterSim: number;
-  waveState: number;
-  render: number;
-};
-
-function roundFrameTiming(value: number) {
-  return Math.round(value * 10) / 10;
-}
-
-function createEmptyFrameStepTimings(): FrameStepTimings {
-  return {
-    bowls: 0,
-    collisions: 0,
-    ripples: 0,
-    resonance: 0,
-    instances: 0,
-    bowlField: 0,
-    interactionField: 0,
-    flowImpulses: 0,
-    waterSim: 0,
-    waveState: 0,
-    render: 0,
-  };
-}
-
-function maybeLogFrameDiagnostics(
-  now: DOMHighResTimeStamp,
-  diagnostics: FpsCounterDiagnostics,
-) {
-  const gpuWorkMs = diagnostics.gpu?.frameMs ?? 0;
-  if (
-    !frameDiagnosticsEnabled ||
-    (
-      diagnostics.rafDelta <= slowFrameRafThresholdMs &&
-      diagnostics.work <= slowFrameWorkThresholdMs &&
-      gpuWorkMs <= slowFrameGpuThresholdMs
-    )
-  ) {
-    return;
+  function own<T extends Disposable>(system: T): T {
+    disposables.push(system);
+    return system;
   }
 
-  if (now - lastFrameDiagnosticsLogAt < frameDiagnosticsLogIntervalMs) {
-    suppressedFrameDiagnosticCount += 1;
-    return;
+  const bus = new EventBus<BasinEvents>();
+  const waterUniforms = createWaterUniforms();
+  const noiseTexture = createNoiseTexture();
+  waterUniforms.uNoiseMap.value = noiseTexture;
+  disposables.push(noiseTexture);
+
+  const cameraControls = createCameraControls(camera, stage.cameraTarget);
+  const cameraOrbit = cameraControls.orbit;
+
+  const frameDiagnostics = own(createFrameDiagnostics(renderer));
+  const lighting = own(createLighting(scene));
+  const bowlMaterials = own(createBowlMaterials(waterUniforms));
+  const bowlSystem = own(createBowlSystem({ bus, scene, materials: bowlMaterials }));
+
+  const simulation = own(createWaterSimulation({ renderer, uniforms: waterUniforms }));
+  const ripples = createRippleField({ uniforms: waterUniforms, simulation });
+  const interactionField = own(createInteractionField({ renderer, uniforms: waterUniforms }));
+  const bowlField = own(createBowlField({ renderer, uniforms: waterUniforms }));
+  const waveState = own(createWaveState({ renderer, uniforms: waterUniforms }));
+
+  const waterSurface = own(createWaterSurface({ scene, uniforms: waterUniforms }));
+  const basinFloor = own(createBasinFloor({ scene, uniforms: waterUniforms }));
+  const woodFloor = own(createWoodFloor({ scene, renderer }));
+  const flowJets = own(createFlowJets({
+    scene,
+    uniforms: waterUniforms,
+    simulation,
+    getPoolRadius: getWaterSurfaceRadius,
+    getFlowShape: () => simulationSettings.flowShape,
+  }));
+
+  let pointerController: PointerController | null = null;
+  let intro: IntroSequence | null = null;
+  let audioEngine: BasinAudio | null = null;
+  let audioStartPromise: Promise<void> | null = null;
+  let animationFrame = 0;
+  let resizeFrame = 0;
+  let waterSimulationAccumulator = 0;
+  let disposed = false;
+
+  function clearWaterState() {
+    waterSimulationAccumulator = 0;
+    simulation.clear();
   }
 
-  console.log("Basin frame diagnostics", {
-    rafDelta: Math.round(diagnostics.rafDelta),
-    approxFps: diagnostics.approxFps,
-    work: roundFrameTiming(diagnostics.work),
-    gpu: diagnostics.gpu,
-    steps: diagnostics.steps,
-    dpr: diagnostics.dpr,
-    canvas: diagnostics.canvas,
-    renderer: diagnostics.renderer,
-    suppressed: suppressedFrameDiagnosticCount,
-  });
-  suppressedFrameDiagnosticCount = 0;
-  lastFrameDiagnosticsLogAt = now;
-}
+  function updateWorldSize() {
+    const aspect = window.innerWidth / Math.max(1, window.innerHeight);
+    const poolDiameter = aspect < 1 ? 9.8 : aspect < 1.08 ? 12.8 : 14.4;
+    world.width = poolDiameter;
+    world.height = poolDiameter;
 
-function createFrameDiagnostics(
-  rafDelta: number,
-  work: number,
-  timings: FrameStepTimings,
-  gpu: GpuTimingSnapshot | null,
-): FpsCounterDiagnostics {
-  return {
-    rafDelta,
-    approxFps: Math.round(1000 / Math.max(rafDelta, 0.001)),
-    work: roundFrameTiming(work),
-    gpu,
-    steps: {
-      bowls: roundFrameTiming(timings.bowls),
-      collisions: roundFrameTiming(timings.collisions),
-      ripples: roundFrameTiming(timings.ripples),
-      resonance: roundFrameTiming(timings.resonance),
-      instances: roundFrameTiming(timings.instances),
-      bowlField: roundFrameTiming(timings.bowlField),
-      interactionField: roundFrameTiming(timings.interactionField),
-      flowImpulses: roundFrameTiming(timings.flowImpulses),
-      waterSim: roundFrameTiming(timings.waterSim),
-      waveState: roundFrameTiming(timings.waveState),
-      render: roundFrameTiming(timings.render),
-    },
-    dpr: renderer.getPixelRatio(),
-    canvas: {
-      width: renderer.domElement.width,
-      height: renderer.domElement.height,
-    },
-    renderer: {
-      calls: renderer.info.render.calls,
-      triangles: renderer.info.render.triangles,
-      points: renderer.info.render.points,
-      geometries: renderer.info.memory.geometries,
-      textures: renderer.info.memory.textures,
-    },
-  };
-}
+    const cameraDefaults = getResponsiveCameraDefaults(aspect);
+    const waterSurfaceRadius = getWaterSurfaceRadius();
+    camera.aspect = aspect;
+    camera.fov = cameraDefaults.fov;
+    cameraOrbit.minDistance = Math.max(waterSurfaceRadius * 0.88, 6.8);
+    cameraOrbit.maxDistance = Math.max(cameraDefaults.distance * 2.2, waterSurfaceRadius * 3.4);
 
-function clearWaterState() {
-  waterSimulationAccumulator = 0;
-  clearWaterSimulation();
-}
-
-function updateWorldSize() {
-  const aspect = window.innerWidth / Math.max(1, window.innerHeight);
-  const poolDiameter = aspect < 1 ? 9.8 : aspect < 1.08 ? 12.8 : 14.4;
-  world.width = poolDiameter;
-  world.height = poolDiameter;
-
-  const cameraDefaults = getResponsiveCameraDefaults(aspect);
-  const waterSurfaceRadius = getWaterSurfaceRadius();
-  camera.aspect = aspect;
-  camera.fov = cameraDefaults.fov;
-  cameraOrbit.minDistance = Math.max(waterSurfaceRadius * 0.88, 6.8);
-  cameraOrbit.maxDistance = Math.max(cameraDefaults.distance * 2.2, waterSurfaceRadius * 3.4);
-
-  if (!cameraOrbit.hasUserControl) {
-    cameraOrbit.azimuth = cameraDefaults.azimuth;
-    cameraOrbit.pitch = cameraDefaults.pitch;
-    cameraOrbit.distance = cameraDefaults.distance;
-    if (aspect < 1) {
-      cameraOrbit.distance = Math.max(
-        cameraOrbit.distance,
-        getPoolFitDistance(waterSurfaceRadius, cameraDefaults.fov, aspect),
-      );
+    if (!cameraOrbit.hasUserControl) {
+      cameraOrbit.azimuth = cameraDefaults.azimuth;
+      cameraOrbit.pitch = cameraDefaults.pitch;
+      cameraOrbit.distance = cameraDefaults.distance;
+      if (aspect < 1) {
+        cameraOrbit.distance = Math.max(
+          cameraOrbit.distance,
+          getPoolFitDistance(waterSurfaceRadius, cameraDefaults.fov, aspect),
+        );
+      }
     }
+
+    cameraOrbit.pitch = THREE.MathUtils.clamp(
+      cameraOrbit.pitch,
+      cameraOrbit.minPitch,
+      cameraOrbit.maxPitch,
+    );
+    cameraOrbit.distance = THREE.MathUtils.clamp(
+      cameraOrbit.distance,
+      cameraOrbit.minDistance,
+      cameraOrbit.maxDistance,
+    );
+    camera.updateProjectionMatrix();
+    cameraControls.apply();
+
+    waterSurface.setRadius(waterSurfaceRadius);
+    basinFloor.setRadius(waterSurfaceRadius);
+    woodFloor.setPoolRadius(waterSurfaceRadius);
+    flowJets.syncSources();
+
+    waterUniforms.uSimWorld.value.set(
+      -waterSurfaceRadius,
+      -waterSurfaceRadius,
+      waterSurfaceRadius * 2,
+      waterSurfaceRadius * 2,
+    );
+    waterUniforms.uPoolData.value.set(
+      0,
+      0,
+      waterSurfaceRadius,
+      Math.max(0.46, waterSurfaceRadius * 0.084),
+    );
+    const pixelRatio = Math.min(window.devicePixelRatio, rendererPixelRatioLimit);
+    renderer.setPixelRatio(pixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    flowJets.setPixelRatio(pixelRatio);
+    bowlSystem.keepAllInsideBounds();
   }
 
-  cameraOrbit.pitch = THREE.MathUtils.clamp(
-    cameraOrbit.pitch,
-    cameraOrbit.minPitch,
-    cameraOrbit.maxPitch,
-  );
-  cameraOrbit.distance = THREE.MathUtils.clamp(
-    cameraOrbit.distance,
-    cameraOrbit.minDistance,
-    cameraOrbit.maxDistance,
-  );
-  camera.updateProjectionMatrix();
-  applyCameraOrbit();
+  // Mobile browsers fire resize continuously while the URL bar slides in and
+  // out, so the work is coalesced onto the next frame instead of running per
+  // event.
+  function requestWorldSizeUpdate() {
+    if (resizeFrame !== 0) {
+      return;
+    }
 
-  water.scale.set(waterSurfaceRadius, waterSurfaceRadius, 1);
-  basinFloor.scale.set(waterSurfaceRadius, waterSurfaceRadius, 1);
-  updateFlowJetState();
-
-  const floorExtent = waterSurfaceRadius * 2 + 34;
-  woodFloor.geometry.dispose();
-  woodFloor.geometry = createCircularWoodFloorGeometry(floorExtent, waterSurfaceRadius);
-
-  waterUniforms.uSimWorld.value.set(
-    -waterSurfaceRadius,
-    -waterSurfaceRadius,
-    waterSurfaceRadius * 2,
-    waterSurfaceRadius * 2,
-  );
-  waterUniforms.uPoolData.value.set(
-    0,
-    0,
-    waterSurfaceRadius,
-    Math.max(0.46, waterSurfaceRadius * 0.084),
-  );
-  const pixelRatio = Math.min(window.devicePixelRatio, rendererPixelRatioLimit);
-  renderer.setPixelRatio(pixelRatio);
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  flowJetAerationUniforms.uPixelRatio.value = pixelRatio;
-  bowlSystem.keepAllInsideBounds();
-}
-
-function rebuildBowls() {
-  pointerController?.cancelInteractions();
-  bowlSystem.rebuild();
-  clearWaterState();
-  updateWorldSize();
-}
-
-function setFlowShape(nextShape: FlowShape) {
-  if (simulationSettings.flowShape === nextShape) {
-    return;
-  }
-
-  simulationSettings.flowShape = nextShape;
-  resetFlowJetTiming();
-  updateFlowJetState();
-  clearWaterState();
-}
-
-function setBowlCount(nextCount: number) {
-  if (simulationSettings.bowlCount === nextCount) {
-    return;
-  }
-
-  simulationSettings.bowlCount = nextCount;
-  rebuildBowls();
-}
-
-function setBowlSizeRange(minRadius: number, maxRadius: number) {
-  simulationSettings.minRadius = minRadius;
-  simulationSettings.maxRadius = maxRadius;
-  rebuildBowls();
-}
-
-function updateWaterSimulationForFrame(delta: number) {
-  waterSimulationAccumulator = Math.min(
-    waterSimulationAccumulator + delta,
-    waterSimulationFixedStep * maxWaterSimulationSubsteps,
-  );
-
-  let substeps = 0;
-  while (
-    waterSimulationAccumulator >= waterSimulationFixedStep &&
-    substeps < maxWaterSimulationSubsteps
-  ) {
-    updateWaterSimulation(waterSimulationFixedStep);
-    waterSimulationAccumulator -= waterSimulationFixedStep;
-    substeps += 1;
-  }
-}
-
-function animate(now: DOMHighResTimeStamp) {
-  animationFrame = window.requestAnimationFrame(animate);
-  let rafDelta = 0;
-  if (frameDiagnosticsEnabled) {
-    rafDelta = now - lastAnimationFrameAt;
-    lastAnimationFrameAt = now;
-  }
-  const frameWorkStartedAt = frameDiagnosticsEnabled ? performance.now() : 0;
-  let stepStartedAt = frameWorkStartedAt;
-  const timings = frameDiagnosticsEnabled ? createEmptyFrameStepTimings() : null;
-  const recordStep = timings ? (step: keyof FrameStepTimings) => {
-    const stepEndedAt = performance.now();
-    timings[step] = stepEndedAt - stepStartedAt;
-    stepStartedAt = stepEndedAt;
-  } : null;
-
-  const delta = Math.min(clock.getDelta(), 0.04);
-  const elapsed = clock.elapsedTime;
-  waterUniforms.uTime.value = elapsed;
-
-  const heldBowl = pointerController?.getDraggedBowl() ?? null;
-  bowlSystem.update(delta, elapsed, heldBowl);
-  recordStep?.("bowls");
-  bowlSystem.resolveCollisions(elapsed, heldBowl);
-  recordStep?.("collisions");
-  updateRipples(delta);
-  recordStep?.("ripples");
-  bowlSystem.updateResonance(delta);
-  recordStep?.("resonance");
-  intro?.update(delta);
-  bowlSystem.updateInstances();
-  recordStep?.("instances");
-  gpuFrameTimer?.beginFrame();
-  updateBowlField(bowlSystem.bowls);
-  recordStep?.("bowlField");
-  updateInteractionField();
-  recordStep?.("interactionField");
-  emitFlowJetImpulses(elapsed);
-  recordStep?.("flowImpulses");
-  updateWaterSimulationForFrame(delta);
-  recordStep?.("waterSim");
-  updateWaveState();
-  recordStep?.("waveState");
-  renderer.render(scene, camera);
-  gpuFrameTimer?.endFrame();
-  recordStep?.("render");
-
-  if (!timings) {
-    return;
-  }
-
-  const gpuTiming = gpuFrameTimer?.collect() ?? null;
-  const diagnostics = createFrameDiagnostics(
-    rafDelta,
-    performance.now() - frameWorkStartedAt,
-    timings,
-    gpuTiming,
-  );
-  maybeLogFrameDiagnostics(now, diagnostics);
-  fpsCounter?.update(now, diagnostics);
-}
-
-function startAnimationLoop() {
-  if (animationFrame !== 0) {
-    return;
-  }
-
-  clock.getDelta();
-  lastAnimationFrameAt = performance.now();
-  animationFrame = window.requestAnimationFrame(animate);
-}
-
-function stopAnimationLoop() {
-  if (animationFrame === 0) {
-    return;
-  }
-
-  window.cancelAnimationFrame(animationFrame);
-  animationFrame = 0;
-}
-
-async function startAudio() {
-  if (audioStartPromise) {
-    return audioStartPromise;
-  }
-
-  audioStartPromise = (async () => {
-    audioEngine ??= new BasinAudio();
-    audioEngine.setMasterVolume(debugSettings.masterVolume);
-    audioEngine.setToneGain(debugSettings.toneGain);
-    await audioEngine.resume();
-  })();
-
-  try {
-    await audioStartPromise;
-  } finally {
-    audioStartPromise = null;
-  }
-}
-
-// iOS Safari often refuses to unlock audio from pointerdown (touchstart) and
-// suspends the context when the tab loses focus or the phone locks, so every
-// gesture keeps nudging the context until it is actually running — click
-// fires on touchend, the gesture class WebKit reliably honors.
-function handleAudioUnlockGesture() {
-  if (audioEngine?.isRunning) {
-    return;
-  }
-
-  if (audioEngine) {
-    void audioEngine.resume().catch(() => {});
-    return;
-  }
-
-  void startAudio().catch((error) => {
-    console.error("clinamen could not start audio.", error);
-  });
-}
-
-function handleVisibilityChange() {
-  if (document.hidden) {
-    stopAnimationLoop();
-  } else {
-    startAnimationLoop();
-    // iOS leaves the context interrupted after a lock/app switch; resuming on
-    // return is permitted without a fresh gesture once audio ran before.
-    void audioEngine?.resume().catch(() => {});
-  }
-}
-
-export function disposeApp(options: DisposeAppOptions = {}) {
-  if (disposed) {
-    return;
-  }
-  disposed = true;
-  const disposeSharedResources = options.disposeSharedResources ?? true;
-
-  stopAnimationLoop();
-  intro?.dispose();
-  intro = null;
-  pointerController?.dispose();
-  pointerController = null;
-  window.removeEventListener("pointerdown", handleAudioUnlockGesture);
-  window.removeEventListener("click", handleAudioUnlockGesture);
-  window.removeEventListener("resize", updateWorldSize);
-  document.removeEventListener("visibilitychange", handleVisibilityChange);
-  window.removeEventListener("beforeunload", handleBeforeUnload);
-  offRipple();
-  offTone();
-  fpsCounter?.destroy();
-  fpsCounter = null;
-  flowShapeControl?.destroy();
-  debugPanel?.destroy();
-  gpuFrameTimer?.dispose();
-  bowlSystem.dispose();
-  lighting.dispose();
-  if (disposeSharedResources) {
-    disposeBowlSharedMaterials();
-    disposeInteractionField();
-    disposeBowlField();
-    disposeWaveState();
-    disposeWaterSimulation();
-    disposeNoiseTexture();
-    disposeFlowJets();
-    disposeWaterSurface();
-    disposeWoodFloor();
-    disposeBasinFloor();
-    disposeStage();
-  }
-  void audioEngine?.close();
-  audioEngine = null;
-}
-
-function handleBeforeUnload() {
-  disposeApp();
-}
-
-const offRipple = bus.on("ripple", ({ x, z, strength, direction }) => {
-  addCollisionRipple(x, z, strength, direction);
-});
-const offTone = bus.on("tone", ({ sizeRatio, strength, sustain }) => {
-  audioEngine?.play(sizeRatio, strength, sustain);
-});
-
-clearWaterState();
-updateWorldSize();
-bowlSystem.rebuild();
-// The title screen owns the first interaction (its strike doubles as the
-// audio-unlock gesture); pointer orbit/drag controls attach once it hands off.
-const skipIntro = import.meta.env.DEV &&
-  new URLSearchParams(window.location.search).has("skipIntro");
-if (skipIntro) {
-  pointerController = createPointerController({ bowlSystem });
-} else {
-  intro = createIntroSequence({
-    bus,
-    bowlSystem,
-    lighting,
-    startAudio,
-    onComplete: () => {
+    resizeFrame = window.requestAnimationFrame(() => {
+      resizeFrame = 0;
       if (disposed) {
         return;
       }
-      pointerController = createPointerController({ bowlSystem });
-    },
-  });
-}
-const flowShapeControl = createFlowShapeControl({
-  getFlowShape: () => simulationSettings.flowShape,
-  getBowlCount: () => simulationSettings.bowlCount,
-  setFlowShape,
-  setBowlCount,
-});
-if (frameDiagnosticsEnabled) {
-  fpsCounter = createFpsCounter();
-}
+      updateWorldSize();
+    });
+  }
 
-let debugPanel: Destroyable | undefined;
-if (import.meta.env.DEV) {
-  void import("./ui/debug-panel").then(({ createDebugPanel }) => {
+  function rebuildBowls() {
+    pointerController?.cancelInteractions();
+    bowlSystem.rebuild();
+    clearWaterState();
+    updateWorldSize();
+  }
+
+  function setFlowShape(nextShape: FlowShape) {
+    if (simulationSettings.flowShape === nextShape) {
+      return;
+    }
+
+    simulationSettings.flowShape = nextShape;
+    flowJets.resetTiming();
+    flowJets.syncSources();
+    clearWaterState();
+  }
+
+  function setBowlCount(nextCount: number) {
+    if (simulationSettings.bowlCount === nextCount) {
+      return;
+    }
+
+    simulationSettings.bowlCount = nextCount;
+    rebuildBowls();
+  }
+
+  function setBowlSizeRange(minRadius: number, maxRadius: number) {
+    simulationSettings.minRadius = minRadius;
+    simulationSettings.maxRadius = maxRadius;
+    rebuildBowls();
+  }
+
+  function updateWaterSimulationForFrame(delta: number) {
+    waterSimulationAccumulator = Math.min(
+      waterSimulationAccumulator + delta,
+      waterSimulationFixedStep * maxWaterSimulationSubsteps,
+    );
+
+    let substeps = 0;
+    while (
+      waterSimulationAccumulator >= waterSimulationFixedStep &&
+      substeps < maxWaterSimulationSubsteps
+    ) {
+      simulation.update(waterSimulationFixedStep);
+      waterSimulationAccumulator -= waterSimulationFixedStep;
+      substeps += 1;
+    }
+  }
+
+  function animate(now: DOMHighResTimeStamp) {
+    animationFrame = window.requestAnimationFrame(animate);
+    frameDiagnostics.beginFrame(now);
+
+    const delta = Math.min(clock.getDelta(), 0.04);
+    const elapsed = clock.elapsedTime;
+    waterUniforms.uTime.value = elapsed;
+
+    const heldBowl = pointerController?.getDraggedBowl() ?? null;
+    bowlSystem.update(delta, elapsed, heldBowl);
+    frameDiagnostics.recordStep("bowls");
+    bowlSystem.resolveCollisions(elapsed, heldBowl);
+    frameDiagnostics.recordStep("collisions");
+    ripples.update(delta);
+    frameDiagnostics.recordStep("ripples");
+    bowlSystem.updateResonance(delta);
+    frameDiagnostics.recordStep("resonance");
+    intro?.update(delta);
+    bowlSystem.updateInstances();
+    frameDiagnostics.recordStep("instances");
+    frameDiagnostics.beginGpuFrame();
+    bowlField.update(bowlSystem.bowls);
+    frameDiagnostics.recordStep("bowlField");
+    interactionField.update();
+    frameDiagnostics.recordStep("interactionField");
+    flowJets.emitImpulses(elapsed);
+    frameDiagnostics.recordStep("flowImpulses");
+    updateWaterSimulationForFrame(delta);
+    frameDiagnostics.recordStep("waterSim");
+    waveState.update();
+    frameDiagnostics.recordStep("waveState");
+    renderer.render(scene, camera);
+    frameDiagnostics.endGpuFrame();
+    frameDiagnostics.recordStep("render");
+
+    const diagnostics = frameDiagnostics.endFrame(now);
+    if (diagnostics) {
+      fpsCounter?.update(now, diagnostics);
+    }
+  }
+
+  function startAnimationLoop() {
+    if (animationFrame !== 0 || disposed) {
+      return;
+    }
+
+    clock.getDelta();
+    frameDiagnostics.markLoopStart();
+    animationFrame = window.requestAnimationFrame(animate);
+  }
+
+  function stopAnimationLoop() {
+    if (animationFrame === 0) {
+      return;
+    }
+
+    window.cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+  }
+
+  async function startAudio() {
+    if (audioStartPromise) {
+      return audioStartPromise;
+    }
+
+    audioStartPromise = (async () => {
+      audioEngine ??= createBasinAudio();
+      audioEngine.setMasterVolume(debugSettings.masterVolume);
+      audioEngine.setToneGain(debugSettings.toneGain);
+      await audioEngine.resume();
+    })();
+
+    try {
+      await audioStartPromise;
+    } finally {
+      audioStartPromise = null;
+    }
+  }
+
+  // iOS Safari often refuses to unlock audio from pointerdown (touchstart) and
+  // suspends the context when the tab loses focus or the phone locks, so every
+  // gesture keeps nudging the context until it is actually running — click
+  // fires on touchend, the gesture class WebKit reliably honors.
+  function handleAudioUnlockGesture() {
+    if (audioEngine?.isRunning) {
+      return;
+    }
+
+    if (audioEngine) {
+      void audioEngine.resume().catch(() => {});
+      return;
+    }
+
+    void startAudio().catch((error) => {
+      console.error("clinamen could not start audio.", error);
+    });
+  }
+
+  function handleVisibilityChange() {
+    if (document.hidden) {
+      stopAnimationLoop();
+    } else {
+      startAnimationLoop();
+      // iOS leaves the context interrupted after a lock/app switch; resuming on
+      // return is permitted without a fresh gesture once audio ran before.
+      void audioEngine?.resume().catch(() => {});
+    }
+  }
+
+  const offRipple = bus.on("ripple", ({ x, z, strength, direction }) => {
+    ripples.addCollisionRipple(x, z, strength, direction);
+  });
+  const offTone = bus.on("tone", ({ sizeRatio, strength, sustain }) => {
+    audioEngine?.play(sizeRatio, strength, sustain);
+  });
+
+  clearWaterState();
+  updateWorldSize();
+  bowlSystem.rebuild();
+
+  // The title screen owns the first interaction (its strike doubles as the
+  // audio-unlock gesture); pointer orbit/drag controls attach once it hands off.
+  function attachPointerController() {
+    pointerController = own(createPointerController({
+      stage,
+      cameraControls,
+      bowlSystem,
+      ripples,
+    }));
+  }
+
+  if (!options.skipIntro) {
+    intro = createIntroSequence({
+      stage,
+      cameraControls,
+      bus,
+      bowlSystem,
+      lighting,
+      materials: bowlMaterials,
+      waterUniforms,
+      startAudio,
+      onComplete: () => {
+        if (disposed) {
+          return;
+        }
+        attachPointerController();
+      },
+    });
+    if (intro) {
+      own(intro);
+    }
+  }
+  if (!intro) {
+    attachPointerController();
+  }
+
+  own(createFlowShapeControl({
+    getFlowShape: () => simulationSettings.flowShape,
+    getBowlCount: () => simulationSettings.bowlCount,
+    setFlowShape,
+    setBowlCount,
+  }));
+
+  const fpsCounter = frameDiagnosticsEnabled ? own(createFpsCounter()) : null;
+
+  if (import.meta.env.DEV) {
+    void import("./ui/debug-panel").then(({ createDebugPanel }) => {
+      if (disposed) {
+        return;
+      }
+      own(createDebugPanel({
+        getMasterVolume: () => debugSettings.masterVolume,
+        setMasterVolume: (value) => {
+          debugSettings.masterVolume = value;
+          audioEngine?.setMasterVolume(value);
+        },
+        getToneGain: () => debugSettings.toneGain,
+        setToneGain: (value) => {
+          debugSettings.toneGain = value;
+          audioEngine?.setToneGain(value);
+        },
+        getImpactMomentumFloor: () => debugSettings.impactMomentumFloor,
+        setImpactMomentumFloor: (value) => {
+          debugSettings.impactMomentumFloor = value;
+        },
+        getWallReflectance: () => debugSettings.wallReflectance,
+        setWallReflectance: (value) => {
+          debugSettings.wallReflectance = value;
+        },
+        getBowlCount: () => simulationSettings.bowlCount,
+        setBowlCount,
+        getMinRadius: () => simulationSettings.minRadius,
+        getMaxRadius: () => simulationSettings.maxRadius,
+        setBowlSizeRange,
+        playTestTone: async () => {
+          await startAudio();
+          audioEngine?.play(0.58, 0.72);
+          ripples.addCollisionRipple(0, 0, 0.38);
+        },
+      }));
+    });
+  }
+
+  function dispose() {
     if (disposed) {
       return;
     }
-    debugPanel = createDebugPanel({
-      getMasterVolume: () => debugSettings.masterVolume,
-      setMasterVolume: (value) => {
-        debugSettings.masterVolume = value;
-        audioEngine?.setMasterVolume(value);
-      },
-      getToneGain: () => debugSettings.toneGain,
-      setToneGain: (value) => {
-        debugSettings.toneGain = value;
-        audioEngine?.setToneGain(value);
-      },
-      getImpactMomentumFloor: () => debugSettings.impactMomentumFloor,
-      setImpactMomentumFloor: (value) => {
-        debugSettings.impactMomentumFloor = value;
-      },
-      getWallReflectance: () => debugSettings.wallReflectance,
-      setWallReflectance: (value) => {
-        debugSettings.wallReflectance = value;
-      },
-      getBowlCount: () => simulationSettings.bowlCount,
-      setBowlCount,
-      getMinRadius: () => simulationSettings.minRadius,
-      getMaxRadius: () => simulationSettings.maxRadius,
-      setBowlSizeRange,
-      playTestTone: async () => {
-        await startAudio();
-        audioEngine?.play(0.58, 0.72);
-        addCollisionRipple(0, 0, 0.38);
-      },
-    });
-  });
-}
+    disposed = true;
 
-window.addEventListener("pointerdown", handleAudioUnlockGesture);
-window.addEventListener("click", handleAudioUnlockGesture);
-window.addEventListener("resize", updateWorldSize);
-document.addEventListener("visibilitychange", handleVisibilityChange);
-window.addEventListener("beforeunload", handleBeforeUnload);
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    disposeApp({ disposeSharedResources: false });
-  });
-}
+    stopAnimationLoop();
+    if (resizeFrame !== 0) {
+      window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = 0;
+    }
 
-startAnimationLoop();
+    window.removeEventListener("pointerdown", handleAudioUnlockGesture);
+    window.removeEventListener("click", handleAudioUnlockGesture);
+    window.removeEventListener("resize", requestWorldSizeUpdate);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    window.removeEventListener("pagehide", dispose);
+    offRipple();
+    offTone();
+
+    // One idiom, one teardown: everything the app owns exposes dispose(), and
+    // reverse construction order means a system is always torn down before
+    // whatever it was built from — the intro restores the lighting it borrowed
+    // before the lighting itself goes.
+    const owned = disposables.splice(0);
+    for (let i = owned.length - 1; i >= 0; i -= 1) {
+      owned[i].dispose();
+    }
+    intro = null;
+    pointerController = null;
+
+    void audioEngine?.dispose();
+    audioEngine = null;
+  }
+
+  window.addEventListener("pointerdown", handleAudioUnlockGesture);
+  window.addEventListener("click", handleAudioUnlockGesture);
+  window.addEventListener("resize", requestWorldSizeUpdate);
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  // pagehide, not beforeunload: iOS Safari frequently skips beforeunload when a
+  // tab is discarded or restored from the back/forward cache.
+  window.addEventListener("pagehide", dispose);
+
+  startAnimationLoop();
+  return { dispose };
+}

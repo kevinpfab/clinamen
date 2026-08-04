@@ -1,14 +1,25 @@
 import * as THREE from "three";
 import { circularPoolSegments } from "../config";
-import { scene } from "../core/stage";
-import { waterUniforms } from "./uniforms";
-import { noisePeriod } from "./noise-texture";
+import type { SharedWaterUniforms } from "./uniforms";
+import {
+  basinConstantsChunk,
+  simulationUvChunk,
+  valueNoiseChunk,
+} from "./shader-chunks";
 
 // The brilliant-blue water surface: a circular plane driven by a custom shader
 // that reads the simulation, bowl, and precomputed interaction fields.
-export const waterMaterial = new THREE.ShaderMaterial({
-  uniforms: waterUniforms,
-  vertexShader: `
+export type WaterSurface = {
+  setRadius: (radius: number) => void;
+  dispose: () => void;
+};
+
+type WaterSurfaceDeps = {
+  scene: THREE.Scene;
+  uniforms: SharedWaterUniforms;
+};
+
+const waterVertexShader = `
     varying vec2 vUv;
     varying vec3 vWorldPosition;
 
@@ -18,8 +29,9 @@ export const waterMaterial = new THREE.ShaderMaterial({
       vWorldPosition = worldPosition.xyz;
       gl_Position = projectionMatrix * viewMatrix * worldPosition;
     }
-  `,
-  fragmentShader: `
+`;
+
+const waterFragmentShader = `
     precision highp float;
 
     uniform float uTime;
@@ -33,11 +45,8 @@ export const waterMaterial = new THREE.ShaderMaterial({
     varying vec2 vUv;
     varying vec3 vWorldPosition;
 
-    const float BASIN_TAU = 6.28318530718;
-
-    float valueNoise(vec2 p) {
-      return texture2D(uNoiseMap, p * ${(1 / noisePeriod).toFixed(6)}).r;
-    }
+    ${basinConstantsChunk}
+    ${valueNoiseChunk}
 
     float waveLayer(vec2 p, vec2 direction, float speed, float scale, float ratio, float weight) {
       vec2 tangent = vec2(-direction.y, direction.x);
@@ -67,9 +76,7 @@ export const waterMaterial = new THREE.ShaderMaterial({
       return surface;
     }
 
-    vec2 simulationUv(vec2 p) {
-      return (p - uSimWorld.xy) / max(uSimWorld.zw, vec2(0.001));
-    }
+    ${simulationUvChunk}
 
     vec4 sampledWaveState(vec2 p) {
       return texture2D(uWaveStateMap, clamp(simulationUv(p), 0.001, 0.999));
@@ -260,22 +267,33 @@ export const waterMaterial = new THREE.ShaderMaterial({
       waterAlpha *= 1.0 - bowlOcclusion;
       gl_FragColor = vec4(color * uSceneDim, waterAlpha);
     }
-  `,
-  transparent: true,
-  depthWrite: false,
-});
+`;
 
-export const water = new THREE.Mesh(
-  new THREE.CircleGeometry(1, circularPoolSegments),
-  waterMaterial,
-);
-water.rotation.x = -Math.PI / 2;
-water.receiveShadow = false;
-water.renderOrder = 2;
-scene.add(water);
+export function createWaterSurface({ scene, uniforms }: WaterSurfaceDeps): WaterSurface {
+  const material = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader: waterVertexShader,
+    fragmentShader: waterFragmentShader,
+    transparent: true,
+    depthWrite: false,
+  });
 
-export function disposeWaterSurface() {
-  scene.remove(water);
-  water.geometry.dispose();
-  waterMaterial.dispose();
+  const mesh = new THREE.Mesh(new THREE.CircleGeometry(1, circularPoolSegments), material);
+  mesh.name = "Basin water surface";
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.receiveShadow = false;
+  mesh.renderOrder = 2;
+  scene.add(mesh);
+
+  return {
+    setRadius(radius: number) {
+      mesh.scale.set(radius, radius, 1);
+    },
+
+    dispose() {
+      scene.remove(mesh);
+      mesh.geometry.dispose();
+      material.dispose();
+    },
+  };
 }

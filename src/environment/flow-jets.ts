@@ -4,20 +4,31 @@ import {
   maxFlowJetAerationParticles,
   flowJetPulseInterval,
   maxFlowJets,
-  simulationSettings,
 } from "../config";
-import { scene } from "../core/stage";
 import { seededUnit } from "../core/math";
-import { getWaterSurfaceRadius } from "../core/world";
-import { getBasinJetSources } from "../physics/flow";
-import { waterUniforms } from "../water/uniforms";
-import { queueDirectionalWaterImpulseComponents } from "../water/simulation";
+import { getBasinJetSources, type BasinJetSource, type FlowShape } from "../physics/flow";
+import type { SharedWaterUniforms } from "../water/uniforms";
+import type { WaterSimulation } from "../water/simulation";
 
 // Flow-jet aeration: a GPU point cloud of bubbles streaming from each basin jet,
 // plus the per-frame sync of jet sources into the shared water uniforms.
-export function getActiveFlowJetSources() {
-  return getBasinJetSources(getWaterSurfaceRadius(), simulationSettings.flowShape);
-}
+export type FlowJets = {
+  // Republish the jet sources into the water uniforms. Call after anything that
+  // moves them: a resize, or a change of flow shape.
+  syncSources: () => void;
+  resetTiming: () => void;
+  emitImpulses: (elapsed: number) => void;
+  setPixelRatio: (pixelRatio: number) => void;
+  dispose: () => void;
+};
+
+type FlowJetsDeps = {
+  scene: THREE.Scene;
+  uniforms: SharedWaterUniforms;
+  simulation: WaterSimulation;
+  getPoolRadius: () => number;
+  getFlowShape: () => FlowShape;
+};
 
 function createFlowJetAerationGeometry() {
   const positions = new Float32Array(maxFlowJetAerationParticles * 3);
@@ -59,18 +70,7 @@ function createFlowJetAerationGeometry() {
   return geometry;
 }
 
-export const flowJetAerationGeometry = createFlowJetAerationGeometry();
-export const flowJetAerationUniforms = {
-  uTime: waterUniforms.uTime,
-  uFlowJetData: waterUniforms.uFlowJetData,
-  uFlowJetParams: waterUniforms.uFlowJetParams,
-  uFlowJetCount: waterUniforms.uFlowJetCount,
-  uSceneDim: waterUniforms.uSceneDim,
-  uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-};
-export const flowJetAerationMaterial = new THREE.ShaderMaterial({
-  uniforms: flowJetAerationUniforms,
-  vertexShader: `
+const aerationVertexShader = `
     precision highp float;
 
     attribute float aJetIndex;
@@ -139,8 +139,9 @@ export const flowJetAerationMaterial = new THREE.ShaderMaterial({
       gl_PointSize = clamp(pointSize * (17.0 / max(-viewPosition.z, 0.001)) * uPixelRatio, 2.0, 13.0);
       gl_Position = projectionMatrix * viewPosition;
     }
-  `,
-  fragmentShader: `
+  `;
+
+const aerationFragmentShader = `
     precision highp float;
 
     uniform float uSceneDim;
@@ -166,65 +167,125 @@ export const flowJetAerationMaterial = new THREE.ShaderMaterial({
       vec3 color = mix(aerationBlue, pearlyWhite, clamp(rim * 0.44 + highlight * 0.82, 0.0, 1.0));
       gl_FragColor = vec4(color * uSceneDim, alpha);
     }
-  `,
-  transparent: true,
-  depthWrite: false,
-  depthTest: true,
-  blending: THREE.AdditiveBlending,
-  toneMapped: false,
-});
-export const flowJetAeration = new THREE.Points(flowJetAerationGeometry, flowJetAerationMaterial);
-flowJetAeration.frustumCulled = false;
-flowJetAeration.renderOrder = 1;
-scene.add(flowJetAeration);
+  `;
 
-export function updateFlowJetState() {
-  const sources = getActiveFlowJetSources();
-  waterUniforms.uFlowJetCount.value = sources.length;
-  flowJetAeration.visible = sources.length > 0;
+export function createFlowJets({
+  scene,
+  uniforms,
+  simulation,
+  getPoolRadius,
+  getFlowShape,
+}: FlowJetsDeps): FlowJets {
+  const geometry = createFlowJetAerationGeometry();
+  const aerationUniforms = {
+    uTime: uniforms.uTime,
+    uFlowJetData: uniforms.uFlowJetData,
+    uFlowJetParams: uniforms.uFlowJetParams,
+    uFlowJetCount: uniforms.uFlowJetCount,
+    uSceneDim: uniforms.uSceneDim,
+    uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+  };
 
-  for (let i = 0; i < maxFlowJets; i += 1) {
-    const source = sources[i];
-    if (!source) {
-      waterUniforms.uFlowJetData.value[i].set(0, 0, 1, 0);
-      waterUniforms.uFlowJetParams.value[i].set(0, 0, 0, 0);
-      continue;
+  const material = new THREE.ShaderMaterial({
+    uniforms: aerationUniforms,
+    vertexShader: aerationVertexShader,
+    fragmentShader: aerationFragmentShader,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+
+  const aeration = new THREE.Points(geometry, material);
+  aeration.name = "Flow jet aeration";
+  aeration.frustumCulled = false;
+  aeration.renderOrder = 1;
+  scene.add(aeration);
+
+  let lastPulseAt = -10;
+
+  // getBasinJetSources builds a fresh array of source objects on every call, and
+  // emitImpulses asks for them ~10x a second. The answer only changes when the
+  // pool is resized or the flow shape is switched, so the last one is kept until
+  // one of those inputs actually moves. Read-only for every consumer here, so
+  // handing out the same array is safe.
+  let cachedSources: BasinJetSource[] | null = null;
+  let cachedPoolRadius = 0;
+  let cachedShape: FlowShape | null = null;
+
+  function getSources() {
+    const poolRadius = getPoolRadius();
+    const shape = getFlowShape();
+    if (!cachedSources || poolRadius !== cachedPoolRadius || shape !== cachedShape) {
+      cachedSources = getBasinJetSources(poolRadius, shape);
+      cachedPoolRadius = poolRadius;
+      cachedShape = shape;
     }
 
-    waterUniforms.uFlowJetData.value[i].set(source.x, source.y, source.directionX, source.directionY);
-    waterUniforms.uFlowJetParams.value[i].set(source.radius, source.strength, source.markerWidth, source.phase);
-  }
-}
-
-
-// Flow-jet timing: pulse the jets into the simulation at a fixed cadence.
-let lastFlowJetPulseAt = -10;
-
-export function resetFlowJetTiming() {
-  lastFlowJetPulseAt = -10;
-}
-export function emitFlowJetImpulses(elapsed: number) {
-  if (elapsed - lastFlowJetPulseAt < flowJetPulseInterval) {
-    return;
+    return cachedSources;
   }
 
-  const sources = getActiveFlowJetSources();
-  for (const source of sources) {
-    const pulse = 0.88 + Math.sin(elapsed * 1.86 + source.phase) * 0.18;
-    queueDirectionalWaterImpulseComponents(
-      source.x,
-      source.y,
-      source.directionX,
-      source.directionY,
-      source.radius,
-      source.strength * pulse,
-    );
-  }
-  lastFlowJetPulseAt = elapsed;
-}
+  return {
+    syncSources() {
+      const sources = getSources();
+      uniforms.uFlowJetCount.value = sources.length;
+      aeration.visible = sources.length > 0;
 
-export function disposeFlowJets() {
-  scene.remove(flowJetAeration);
-  flowJetAerationGeometry.dispose();
-  flowJetAerationMaterial.dispose();
+      for (let i = 0; i < maxFlowJets; i += 1) {
+        const source = sources[i];
+        if (!source) {
+          uniforms.uFlowJetData.value[i].set(0, 0, 1, 0);
+          uniforms.uFlowJetParams.value[i].set(0, 0, 0, 0);
+          continue;
+        }
+
+        uniforms.uFlowJetData.value[i].set(
+          source.x,
+          source.y,
+          source.directionX,
+          source.directionY,
+        );
+        uniforms.uFlowJetParams.value[i].set(
+          source.radius,
+          source.strength,
+          source.markerWidth,
+          source.phase,
+        );
+      }
+    },
+
+    resetTiming() {
+      lastPulseAt = -10;
+    },
+
+    emitImpulses(elapsed: number) {
+      if (elapsed - lastPulseAt < flowJetPulseInterval) {
+        return;
+      }
+
+      for (const source of getSources()) {
+        const pulse = 0.88 + Math.sin(elapsed * 1.86 + source.phase) * 0.18;
+        simulation.queueDirectionalImpulseComponents(
+          source.x,
+          source.y,
+          source.directionX,
+          source.directionY,
+          source.radius,
+          source.strength * pulse,
+        );
+      }
+      lastPulseAt = elapsed;
+    },
+
+    setPixelRatio(pixelRatio: number) {
+      aerationUniforms.uPixelRatio.value = pixelRatio;
+    },
+
+    dispose() {
+      scene.remove(aeration);
+      geometry.dispose();
+      material.dispose();
+    },
+  };
 }

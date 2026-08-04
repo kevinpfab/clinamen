@@ -1,15 +1,16 @@
 import * as THREE from "three";
 import {
-  bowlCollisionSettings,
   bowlEmergenceDepth,
   bowlImpactCooldown,
-  debugSettings,
-  simulationSettings,
   velocityWorldScale,
 } from "../config";
-import { EventBus, type BasinEvents } from "../core/events";
+import {
+  bowlCollisionSettings,
+  debugSettings,
+  simulationSettings,
+} from "../settings";
+import type { EventBus, BasinEvents } from "../core/events";
 import { pseudoRandom } from "../core/math";
-import { scene } from "../core/stage";
 import { getWaterSurfaceRadius } from "../core/world";
 import {
   getBowlContactRadius,
@@ -19,10 +20,12 @@ import {
   type BowlContactState,
 } from "../physics/collision";
 import { resolveCircularBoundaryContact } from "../physics/bounds";
+import { separateBodies, type SeparationBody } from "../physics/separation";
 import { sampleBasinCurrent, type BasinCurrentSample } from "../physics/flow";
 import type { BowlBody } from "./types";
 import { createBowlInstanceRenderer, type BowlInstanceRenderer } from "./instances";
-import { bowlResonancePulseLifetime } from "./materials";
+import { goldenAngle, scatterBowlPosition } from "./layout";
+import { bowlResonancePulseLifetime, type BowlMaterials } from "./materials";
 import { triggerBowlResonance, updateBowlResonance } from "./resonance";
 import {
   getBowlCenterLimit,
@@ -31,194 +34,80 @@ import {
   getToneRatio,
 } from "./tuning";
 
+export type BowlSystem = {
+  bowls: BowlBody[];
+  setFrozen: (frozen: boolean) => void;
+  rebuild: () => void;
+  update: (delta: number, elapsed: number, draggedBowl: BowlBody | null) => void;
+  resolveCollisions: (now: number, draggedBowl: BowlBody | null) => void;
+  updateResonance: (delta: number) => void;
+  updateInstances: () => void;
+  findAtPoint: (point: THREE.Vector2) => BowlBody | null;
+  clampPointToBounds: (bowl: BowlBody, point: THREE.Vector2) => THREE.Vector2;
+  keepAllInsideBounds: () => void;
+  keepInsideBounds: (bowl: BowlBody, restitution?: number) => void;
+  addMomentum: (bowl: BowlBody, strength: number) => void;
+  // Relaxes overlaps out of the current layout, optionally holding one bowl
+  // still. The intro calls this after moving its hero bowl to the pool center.
+  separate: (pinned?: BowlBody | null) => void;
+  dispose: () => void;
+};
+
+type BowlSystemDeps = {
+  bus: EventBus<BasinEvents>;
+  scene: THREE.Scene;
+  materials: BowlMaterials;
+};
+
 const bowlMomentumDecayRate = 0.38;
 const maxBowlMomentumStrength = 1;
 
-export class BowlSystem {
-  private bowlsInternal: BowlBody[] = [];
+// Layout relaxation. The clearance matches the collision solver's own contact
+// padding closely enough that a separated layout does not immediately generate
+// contact events on the first simulated frame.
+const layoutClearance = 0.06;
+const layoutRelaxationIterations = 120;
+
+export function createBowlSystem({ bus, scene, materials }: BowlSystemDeps): BowlSystem {
+  let bowls: BowlBody[] = [];
   // While frozen (the intro, until every bowl has surfaced) bowls only spin
   // in place: no drift, no collisions. The simulation then starts as one
   // moment instead of bowl by bowl.
-  private frozen = false;
-  private bowlInstances: BowlInstanceRenderer | null = null;
-  private readonly contactStates = new Map<number, BowlContactState>();
-  private readonly collisionBodies: BowlCollisionBody[] = [];
-  private readonly currentSample: BasinCurrentSample = {
+  let frozen = false;
+  let instances: BowlInstanceRenderer | null = null;
+
+  const contactStates = new Map<number, BowlContactState>();
+  const collisionBodies: BowlCollisionBody[] = [];
+  const currentSample: BasinCurrentSample = {
     x: 0,
     y: 0,
     energy: 0,
     centerChannel: 0,
     rimChannel: 0,
   };
-  private readonly currentVelocity = new THREE.Vector2();
+  const currentVelocity = new THREE.Vector2();
+  const scratchNormal = new THREE.Vector2();
 
-  constructor(private readonly bus: EventBus<BasinEvents>) {}
-
-  get bowls() {
-    return this.bowlsInternal;
+  function canPlayImpactTone(impactMomentum: number) {
+    return impactMomentum >= debugSettings.impactMomentumFloor;
   }
 
-  setFrozen(frozen: boolean) {
-    this.frozen = frozen;
-  }
-
-  rebuild() {
-    this.disposeInstances();
-    this.contactStates.clear();
-    this.bowlsInternal = this.createBowls();
-  }
-
-  dispose() {
-    this.disposeInstances();
-    this.bowlsInternal = [];
-    this.collisionBodies.length = 0;
-    this.contactStates.clear();
-  }
-
-  update(delta: number, elapsed: number, draggedBowl: BowlBody | null) {
-    const poolRadius = getWaterSurfaceRadius();
-
-    for (const bowl of this.bowlsInternal) {
-      bowl.mesh.position.y = getBowlPlaneY(bowl.radius)
-        - bowlEmergenceDepth * (1 - bowl.emergence);
-      bowl.visual.rotation.x = 0;
-      bowl.visual.rotation.z = 0;
-
-      if (this.frozen) {
-        bowl.mesh.rotation.y += bowl.angularVelocity * delta * 0.30;
-        continue;
-      }
-
-      // Surfacing bowls hold their position until they fully emerge.
-      if (bowl.emergence < 1) {
-        continue;
-      }
-
-      if (draggedBowl === bowl) {
-        bowl.mesh.rotation.y += bowl.angularVelocity * delta * 0.30;
-        continue;
-      }
-
-      bowl.momentumStrength = Math.max(0, bowl.momentumStrength - delta * bowlMomentumDecayRate);
-      const momentum = bowl.momentumStrength * bowl.momentumStrength;
-      const current = sampleBasinCurrent(
-        { x: bowl.mesh.position.x, y: bowl.mesh.position.z },
-        poolRadius,
-        bowl.radius,
-        elapsed,
-        simulationSettings.flowShape,
-        this.currentSample,
-      );
-      const baseCurrentResponse = 0.76 + bowl.toneRatio * 0.34 + current.energy * 0.30;
-      const currentResponse = baseCurrentResponse * THREE.MathUtils.lerp(1, 0.28, momentum);
-      const currentBlend = 1 - Math.exp(-delta * currentResponse);
-      this.currentVelocity.set(current.x, current.y);
-      bowl.velocity.lerp(this.currentVelocity, currentBlend);
-
-      const wanderScale = (0.0022 + (1 - current.energy) * 0.0018) * delta;
-      bowl.velocity.x += Math.cos(elapsed * 0.17 + bowl.phase) * wanderScale;
-      bowl.velocity.y += Math.sin(elapsed * 0.13 - bowl.phase * 0.7) * wanderScale;
-
-      const targetSpeed = (0.058 + current.energy * 0.046) * THREE.MathUtils.lerp(1, 3.2, momentum);
-      const speedTrim = THREE.MathUtils.lerp(0.035, 0.012, momentum);
-      const speed = bowl.velocity.length();
-      if (speed > targetSpeed) {
-        bowl.velocity.multiplyScalar(THREE.MathUtils.lerp(1, targetSpeed / speed, speedTrim));
-      }
-
-      bowl.velocity.multiplyScalar(Math.pow(0.9984, delta * 60));
-      bowl.mesh.position.x += bowl.velocity.x * delta * velocityWorldScale;
-      bowl.mesh.position.z += bowl.velocity.y * delta * velocityWorldScale;
-      bowl.mesh.rotation.y += bowl.angularVelocity * delta;
-
-      this.keepInsideBounds(bowl);
-    }
-  }
-
-  resolveCollisions(now: number, draggedBowl: BowlBody | null) {
-    if (this.frozen) {
-      return;
-    }
-
-    this.syncCollisionBodies(draggedBowl);
-    const collisionEvents = resolveBowlContacts(
-      this.collisionBodies,
-      this.contactStates,
-      now,
-      bowlCollisionSettings,
+  function addMomentum(bowl: BowlBody, strength: number) {
+    bowl.momentumStrength = Math.max(
+      bowl.momentumStrength,
+      THREE.MathUtils.clamp(strength, 0, maxBowlMomentumStrength),
     );
-
-    for (const body of this.collisionBodies) {
-      const bowl = this.bowlsInternal[body.id];
-      if (!bowl) {
-        continue;
-      }
-
-      bowl.mesh.position.x = body.x;
-      bowl.mesh.position.z = body.z;
-      bowl.velocity.set(body.vx, body.vz);
-    }
-
-    for (const event of collisionEvents) {
-      this.emitCollisionEvent(event, now);
-    }
   }
 
-  updateResonance(delta: number) {
-    updateBowlResonance(delta, this.bowlsInternal);
-  }
-
-  updateInstances() {
-    this.bowlInstances?.update(this.bowlsInternal);
-  }
-
-  findAtPoint(point: THREE.Vector2) {
-    let selectedBowl: BowlBody | null = null;
-    let selectedDistance = Number.POSITIVE_INFINITY;
-
-    for (const bowl of this.bowlsInternal) {
-      if (bowl.emergence < 1) {
-        continue;
-      }
-
-      const distance = Math.hypot(
-        point.x - bowl.mesh.position.x,
-        point.y - bowl.mesh.position.z,
-      );
-      const hitRadius = bowl.radius + 0.14;
-      const normalizedDistance = distance / hitRadius;
-
-      if (normalizedDistance <= 1 && normalizedDistance < selectedDistance) {
-        selectedBowl = bowl;
-        selectedDistance = normalizedDistance;
-      }
-    }
-
-    return selectedBowl;
-  }
-
-  clampPointToBounds(bowl: BowlBody, point: THREE.Vector2) {
-    const centerLimit = getBowlCenterLimit(bowl.radius);
-    if (point.length() > centerLimit) {
-      point.setLength(centerLimit);
-    }
-    return point;
-  }
-
-  keepAllInsideBounds() {
-    for (const bowl of this.bowlsInternal) {
-      this.keepInsideBounds(bowl, 0);
-    }
-  }
-
-  keepInsideBounds(bowl: BowlBody, restitution = 0.76) {
+  function keepInsideBounds(bowl: BowlBody, restitution = 0.76) {
+    const poolRadius = getWaterSurfaceRadius();
     const contact = resolveCircularBoundaryContact({
       x: bowl.mesh.position.x,
       z: bowl.mesh.position.z,
       vx: bowl.velocity.x,
       vz: bowl.velocity.y,
       radius: bowl.radius,
-      centerLimit: getBowlCenterLimit(bowl.radius),
+      centerLimit: getBowlCenterLimit(bowl.radius, poolRadius),
       restitution,
       impactSpeedFloor: bowlCollisionSettings.impactSpeedFloor,
     });
@@ -235,50 +124,80 @@ export class BowlSystem {
       return;
     }
 
-    this.addMomentum(bowl, contact.impactStrength * 2.6);
-    const inwardDirection = new THREE.Vector2(-contact.normalX, -contact.normalZ);
-    this.bus.emit("ripple", {
-      x: contact.normalX * getWaterSurfaceRadius(),
-      z: contact.normalZ * getWaterSurfaceRadius(),
+    addMomentum(bowl, contact.impactStrength * 2.6);
+    bus.emit("ripple", {
+      x: contact.normalX * poolRadius,
+      z: contact.normalZ * poolRadius,
       strength: THREE.MathUtils.clamp(
         0.18 + Math.sqrt(Math.max(0, contact.impactStrength)) * 0.18,
         0.18,
         0.42,
       ),
-      direction: inwardDirection,
+      direction: scratchNormal.set(-contact.normalX, -contact.normalZ),
     });
-    if (this.canPlayImpactTone(contact.impactMomentum)) {
-      const normal = new THREE.Vector2(contact.normalX, contact.normalZ);
-      triggerBowlResonance(bowl, contact.impactStrength * 1.8, normal);
-      this.bus.emit("tone", { sizeRatio: bowl.toneRatio, strength: contact.impactStrength });
+    if (canPlayImpactTone(contact.impactMomentum)) {
+      triggerBowlResonance(bowl, contact.impactStrength * 1.8, scratchNormal.set(contact.normalX, contact.normalZ));
+      bus.emit("tone", { sizeRatio: bowl.toneRatio, strength: contact.impactStrength });
     }
   }
 
-  addMomentum(bowl: BowlBody, strength: number) {
-    bowl.momentumStrength = Math.max(
-      bowl.momentumStrength,
-      THREE.MathUtils.clamp(strength, 0, maxBowlMomentumStrength),
-    );
+  function separate(pinned: BowlBody | null = null) {
+    if (bowls.length < 2) {
+      return;
+    }
+
+    const poolRadius = getWaterSurfaceRadius();
+    const layout: SeparationBody[] = bowls.map((bowl) => ({
+      x: bowl.mesh.position.x,
+      z: bowl.mesh.position.z,
+      contactRadius: bowl.contactRadius,
+      centerLimit: getBowlCenterLimit(bowl.radius, poolRadius),
+      pinned: bowl === pinned,
+    }));
+
+    separateBodies(layout, {
+      padding: layoutClearance,
+      maxIterations: layoutRelaxationIterations,
+      angleFor: (aIndex, bIndex, iteration) =>
+        pseudoRandom(bowls[aIndex].id * 13.7 + bowls[bIndex].id * 3.1 + iteration * 0.7) * Math.PI * 2,
+    });
+
+    for (let i = 0; i < bowls.length; i += 1) {
+      bowls[i].mesh.position.x = layout[i].x;
+      bowls[i].mesh.position.z = layout[i].z;
+    }
   }
 
-  private createBowls(): BowlBody[] {
-    const bodies: BowlBody[] = [];
-    const instances = createBowlInstanceRenderer(simulationSettings.bowlCount);
+  function disposeInstances() {
+    if (!instances) {
+      return;
+    }
 
-    for (let i = 0; i < simulationSettings.bowlCount; i += 1) {
-      const radius = getBowlRadius(i, simulationSettings.bowlCount);
-      const contactRadius = getBowlContactRadius(radius);
+    scene.remove(...instances.objects);
+    instances.dispose();
+    instances = null;
+  }
+
+  function createBowls(): BowlBody[] {
+    const count = simulationSettings.bowlCount;
+    const poolRadius = getWaterSurfaceRadius();
+    const bodies: BowlBody[] = [];
+    const renderer = createBowlInstanceRenderer(count, materials);
+
+    for (let i = 0; i < count; i += 1) {
+      const radius = getBowlRadius(i, count, simulationSettings);
       const mesh = new THREE.Object3D();
       const visual = new THREE.Object3D();
-      const angle = i * 2.399963229728653;
-      const position = this.findInitialPosition(radius, bodies, i);
+      const angle = i * goldenAngle;
+      const position = scatterBowlPosition(i, count, getBowlCenterLimit(radius, poolRadius));
       mesh.position.x = position.x;
       mesh.position.y = getBowlPlaneY(radius);
-      mesh.position.z = position.y;
+      mesh.position.z = position.z;
       mesh.rotation.y = angle;
 
       const speed = 0.095 - radius * 0.030;
       const direction = angle + Math.PI * 0.5 + (i % 3) * 0.25;
+      const toneRatio = getToneRatio(radius, simulationSettings);
       bodies.push({
         id: i,
         instanceIndex: i,
@@ -288,13 +207,13 @@ export class BowlSystem {
           age: bowlResonancePulseLifetime,
           lifetime: bowlResonancePulseLifetime,
           strength: 0,
-          toneRatio: getToneRatio(radius),
+          toneRatio,
           impactDirection: new THREE.Vector2(1, 0),
           envelope: 0,
         },
         radius,
-        contactRadius,
-        toneRatio: getToneRatio(radius),
+        contactRadius: getBowlContactRadius(radius),
+        toneRatio,
         velocity: new THREE.Vector2(Math.cos(direction), Math.sin(direction)).multiplyScalar(speed),
         emergence: 1,
         momentumStrength: 0,
@@ -304,56 +223,17 @@ export class BowlSystem {
       });
     }
 
-    scene.add(...instances.objects);
-    instances.update(bodies);
-    this.bowlInstances = instances;
+    scene.add(...renderer.objects);
+    instances = renderer;
     return bodies;
   }
 
-  private findInitialPosition(radius: number, existingBodies: BowlBody[], index: number) {
-    const centerLimit = getBowlCenterLimit(radius);
-    const contactRadius = getBowlContactRadius(radius);
+  function syncCollisionBodies(draggedBowl: BowlBody | null) {
+    collisionBodies.length = bowls.length;
 
-    for (let attempt = 0; attempt < 180; attempt += 1) {
-      const angle = pseudoRandom(index * 71.3 + attempt * 13.7 + 0.19) * Math.PI * 2;
-      const distance = Math.sqrt(pseudoRandom(index * 43.1 + attempt * 19.9 + 0.53)) * centerLimit;
-      const x = Math.cos(angle) * distance;
-      const z = Math.sin(angle) * distance;
-      const fits = existingBodies.every((body) => {
-        const dx = body.mesh.position.x - x;
-        const dz = body.mesh.position.z - z;
-        return Math.hypot(dx, dz) > body.contactRadius + contactRadius + 0.06;
-      });
-
-      if (fits) {
-        return new THREE.Vector2(x, z);
-      }
-    }
-
-    const fallbackAngle = index * 2.399963229728653;
-    const fallbackRing = 0.22 + (index % 5) * 0.12;
-    return new THREE.Vector2(
-      Math.cos(fallbackAngle) * centerLimit * fallbackRing,
-      Math.sin(fallbackAngle) * centerLimit * fallbackRing,
-    );
-  }
-
-  private disposeInstances() {
-    if (!this.bowlInstances) {
-      return;
-    }
-
-    scene.remove(...this.bowlInstances.objects);
-    this.bowlInstances.dispose();
-    this.bowlInstances = null;
-  }
-
-  private syncCollisionBodies(draggedBowl: BowlBody | null) {
-    this.collisionBodies.length = this.bowlsInternal.length;
-
-    for (let i = 0; i < this.bowlsInternal.length; i += 1) {
-      const bowl = this.bowlsInternal[i];
-      const body = this.collisionBodies[i] ?? {
+    for (let i = 0; i < bowls.length; i += 1) {
+      const bowl = bowls[i];
+      const body = collisionBodies[i] ?? {
         id: bowl.id,
         x: 0,
         z: 0,
@@ -373,50 +253,207 @@ export class BowlSystem {
       body.inverseMass = draggedBowl === bowl || bowl.emergence < 1
         ? 0
         : 1 / Math.max(bowl.radius, 0.001);
-      this.collisionBodies[i] = body;
+      collisionBodies[i] = body;
     }
   }
 
-  private emitCollisionEvent(event: BowlCollisionEvent, now: number) {
-    const a = this.bowlsInternal[event.aId];
-    const b = this.bowlsInternal[event.bId];
+  function emitCollisionEvent(event: BowlCollisionEvent, now: number) {
+    const a = bowls[event.aId];
+    const b = bowls[event.bId];
     if (!a || !b || a.emergence < 1 || b.emergence < 1) {
       return;
     }
 
-    const contactNormal = new THREE.Vector2(event.normalX, event.normalZ);
+    const contactNormal = scratchNormal.set(event.normalX, event.normalZ);
     const collisionMomentum = Math.max(event.strength * 1.25, event.closingSpeed * 3.4);
-    this.addMomentum(a, collisionMomentum);
-    this.addMomentum(b, collisionMomentum);
+    addMomentum(a, collisionMomentum);
+    addMomentum(b, collisionMomentum);
 
     if (now - Math.max(a.lastImpactAt, b.lastImpactAt) <= bowlImpactCooldown) {
       return;
     }
 
-    this.bus.emit("ripple", {
+    bus.emit("ripple", {
       x: event.contactX,
       z: event.contactZ,
       strength: event.strength,
       direction: contactNormal,
     });
 
-    if (this.canPlayImpactTone(event.impactMomentum)) {
+    if (canPlayImpactTone(event.impactMomentum)) {
       triggerBowlResonance(a, event.strength, contactNormal);
-      triggerBowlResonance(b, event.strength, contactNormal.clone().multiplyScalar(-1));
-      this.bus.emit("tone", { sizeRatio: (a.toneRatio + b.toneRatio) * 0.5, strength: event.strength });
+      triggerBowlResonance(b, event.strength, contactNormal.set(-event.normalX, -event.normalZ));
+      bus.emit("tone", { sizeRatio: (a.toneRatio + b.toneRatio) * 0.5, strength: event.strength });
     }
 
     a.lastImpactAt = now;
     b.lastImpactAt = now;
   }
 
-  private canPlayImpactTone(impactMomentum: number) {
-    return impactMomentum >= debugSettings.impactMomentumFloor;
-  }
-}
+  const system: BowlSystem = {
+    get bowls() {
+      return bowls;
+    },
 
-export function createBowlSystem(bus: EventBus<BasinEvents>) {
-  const system = new BowlSystem(bus);
-  system.rebuild();
+    setFrozen(next: boolean) {
+      frozen = next;
+    },
+
+    rebuild() {
+      disposeInstances();
+      contactStates.clear();
+      bowls = createBowls();
+      separate();
+      instances?.update(bowls);
+    },
+
+    update(delta: number, elapsed: number, draggedBowl: BowlBody | null) {
+      const poolRadius = getWaterSurfaceRadius();
+
+      for (const bowl of bowls) {
+        bowl.mesh.position.y = getBowlPlaneY(bowl.radius)
+          - bowlEmergenceDepth * (1 - bowl.emergence);
+        bowl.visual.rotation.x = 0;
+        bowl.visual.rotation.z = 0;
+
+        if (frozen) {
+          bowl.mesh.rotation.y += bowl.angularVelocity * delta * 0.30;
+          continue;
+        }
+
+        // Surfacing bowls hold their position until they fully emerge.
+        if (bowl.emergence < 1) {
+          continue;
+        }
+
+        if (draggedBowl === bowl) {
+          bowl.mesh.rotation.y += bowl.angularVelocity * delta * 0.30;
+          continue;
+        }
+
+        bowl.momentumStrength = Math.max(0, bowl.momentumStrength - delta * bowlMomentumDecayRate);
+        const momentum = bowl.momentumStrength * bowl.momentumStrength;
+        const current = sampleBasinCurrent(
+          { x: bowl.mesh.position.x, y: bowl.mesh.position.z },
+          poolRadius,
+          bowl.radius,
+          elapsed,
+          simulationSettings.flowShape,
+          currentSample,
+        );
+        const baseCurrentResponse = 0.76 + bowl.toneRatio * 0.34 + current.energy * 0.30;
+        const currentResponse = baseCurrentResponse * THREE.MathUtils.lerp(1, 0.28, momentum);
+        const currentBlend = 1 - Math.exp(-delta * currentResponse);
+        currentVelocity.set(current.x, current.y);
+        bowl.velocity.lerp(currentVelocity, currentBlend);
+
+        const wanderScale = (0.0022 + (1 - current.energy) * 0.0018) * delta;
+        bowl.velocity.x += Math.cos(elapsed * 0.17 + bowl.phase) * wanderScale;
+        bowl.velocity.y += Math.sin(elapsed * 0.13 - bowl.phase * 0.7) * wanderScale;
+
+        const targetSpeed = (0.058 + current.energy * 0.046) * THREE.MathUtils.lerp(1, 3.2, momentum);
+        const speedTrim = THREE.MathUtils.lerp(0.035, 0.012, momentum);
+        const speed = bowl.velocity.length();
+        if (speed > targetSpeed) {
+          bowl.velocity.multiplyScalar(THREE.MathUtils.lerp(1, targetSpeed / speed, speedTrim));
+        }
+
+        bowl.velocity.multiplyScalar(Math.pow(0.9984, delta * 60));
+        bowl.mesh.position.x += bowl.velocity.x * delta * velocityWorldScale;
+        bowl.mesh.position.z += bowl.velocity.y * delta * velocityWorldScale;
+        bowl.mesh.rotation.y += bowl.angularVelocity * delta;
+
+        keepInsideBounds(bowl);
+      }
+    },
+
+    resolveCollisions(now: number, draggedBowl: BowlBody | null) {
+      if (frozen) {
+        return;
+      }
+
+      syncCollisionBodies(draggedBowl);
+      const collisionEvents = resolveBowlContacts(
+        collisionBodies,
+        contactStates,
+        now,
+        bowlCollisionSettings,
+      );
+
+      for (const body of collisionBodies) {
+        const bowl = bowls[body.id];
+        if (!bowl) {
+          continue;
+        }
+
+        bowl.mesh.position.x = body.x;
+        bowl.mesh.position.z = body.z;
+        bowl.velocity.set(body.vx, body.vz);
+      }
+
+      for (const event of collisionEvents) {
+        emitCollisionEvent(event, now);
+      }
+    },
+
+    updateResonance(delta: number) {
+      updateBowlResonance(delta, bowls);
+    },
+
+    updateInstances() {
+      instances?.update(bowls);
+    },
+
+    findAtPoint(point: THREE.Vector2) {
+      let selectedBowl: BowlBody | null = null;
+      let selectedDistance = Number.POSITIVE_INFINITY;
+
+      for (const bowl of bowls) {
+        if (bowl.emergence < 1) {
+          continue;
+        }
+
+        const distance = Math.hypot(
+          point.x - bowl.mesh.position.x,
+          point.y - bowl.mesh.position.z,
+        );
+        const hitRadius = bowl.radius + 0.14;
+        const normalizedDistance = distance / hitRadius;
+
+        if (normalizedDistance <= 1 && normalizedDistance < selectedDistance) {
+          selectedBowl = bowl;
+          selectedDistance = normalizedDistance;
+        }
+      }
+
+      return selectedBowl;
+    },
+
+    clampPointToBounds(bowl: BowlBody, point: THREE.Vector2) {
+      const centerLimit = getBowlCenterLimit(bowl.radius, getWaterSurfaceRadius());
+      if (point.length() > centerLimit) {
+        point.setLength(centerLimit);
+      }
+      return point;
+    },
+
+    keepAllInsideBounds() {
+      for (const bowl of bowls) {
+        keepInsideBounds(bowl, 0);
+      }
+    },
+
+    keepInsideBounds,
+    addMomentum,
+    separate,
+
+    dispose() {
+      disposeInstances();
+      bowls = [];
+      collisionBodies.length = 0;
+      contactStates.clear();
+    },
+  };
+
   return system;
 }

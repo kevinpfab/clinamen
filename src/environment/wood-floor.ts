@@ -3,23 +3,23 @@ import woodAlbedoUrl from "../assets/wood-floor-albedo.svg?url";
 import woodNormalUrl from "../assets/wood-floor-normal.svg?url";
 import woodRoughnessUrl from "../assets/wood-floor-roughness.svg?url";
 import { circularPoolSegments } from "../config";
-import { renderer, scene } from "../core/stage";
 
 // A static textured circular wood floor surrounding the pool. These maps are
 // stored as assets so mobile startup does not spend time baking canvas textures.
-const textureLoader = new THREE.TextureLoader();
+export type WoodFloor = {
+  setPoolRadius: (poolRadius: number) => void;
+  dispose: () => void;
+};
 
-function loadWoodTexture(url: string, srgb: boolean) {
-  const texture = textureLoader.load(url);
-  texture.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(5.5, 5.5);
-  texture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
-  return texture;
-}
+type WoodFloorDeps = {
+  scene: THREE.Scene;
+  renderer: THREE.WebGLRenderer;
+};
 
-export function createCircularWoodFloorGeometry(outerExtent: number, poolRadius: number) {
+// How far the boards extend past the basin rim, in world units.
+const woodFloorMargin = 34;
+
+function createCircularWoodFloorGeometry(outerExtent: number, poolRadius: number) {
   const halfExtent = outerExtent / 2;
   const holeRadius = Math.min(poolRadius, halfExtent - 0.01);
   const shape = new THREE.Shape();
@@ -51,36 +51,71 @@ export function createCircularWoodFloorGeometry(outerExtent: number, poolRadius:
   return geometry;
 }
 
-export const woodFloorTextures = {
-  map: loadWoodTexture(woodAlbedoUrl, true),
-  normalMap: loadWoodTexture(woodNormalUrl, false),
-  roughnessMap: loadWoodTexture(woodRoughnessUrl, false),
-};
+export function createWoodFloor({ scene, renderer }: WoodFloorDeps): WoodFloor {
+  const textureLoader = new THREE.TextureLoader();
+  const maxAnisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
 
-export const woodFloorMaterial = new THREE.MeshStandardMaterial({
-  map: woodFloorTextures.map,
-  normalMap: woodFloorTextures.normalMap,
-  roughnessMap: woodFloorTextures.roughnessMap,
-  color: 0xcdb688,
-  roughness: 0.82,
-  metalness: 0.0,
-});
-woodFloorMaterial.normalScale.set(0.45, 0.45);
+  function loadWoodTexture(url: string, srgb: boolean) {
+    const texture = textureLoader.load(url);
+    texture.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(5.5, 5.5);
+    texture.anisotropy = maxAnisotropy;
+    return texture;
+  }
 
-export const woodFloor = new THREE.Mesh(
-  createCircularWoodFloorGeometry(40, 4),
-  woodFloorMaterial,
-);
-woodFloor.rotation.x = -Math.PI / 2;
-woodFloor.position.y = -0.012;
-woodFloor.receiveShadow = false;
-scene.add(woodFloor);
+  const textures = {
+    map: loadWoodTexture(woodAlbedoUrl, true),
+    normalMap: loadWoodTexture(woodNormalUrl, false),
+    roughnessMap: loadWoodTexture(woodRoughnessUrl, false),
+  };
 
-export function disposeWoodFloor() {
-  scene.remove(woodFloor);
-  woodFloor.geometry.dispose();
-  woodFloorMaterial.dispose();
-  woodFloorTextures.map.dispose();
-  woodFloorTextures.normalMap.dispose();
-  woodFloorTextures.roughnessMap.dispose();
+  const material = new THREE.MeshStandardMaterial({
+    map: textures.map,
+    normalMap: textures.normalMap,
+    roughnessMap: textures.roughnessMap,
+    color: 0xcdb688,
+    roughness: 0.82,
+    metalness: 0.0,
+  });
+  material.normalScale.set(0.45, 0.45);
+
+  // NaN until the first sizing pass, so the placeholder geometry below is
+  // always replaced once.
+  let builtPoolRadius = Number.NaN;
+
+  const mesh = new THREE.Mesh(createCircularWoodFloorGeometry(40, 4), material);
+  mesh.name = "Wood floor";
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = -0.012;
+  mesh.receiveShadow = false;
+  scene.add(mesh);
+
+  return {
+    setPoolRadius(poolRadius: number) {
+      // Earcutting a 192-segment hole is the most expensive thing on the resize
+      // path, and the floor only depends on the basin radius — which most
+      // resize events (an iOS URL bar sliding away, say) leave untouched.
+      if (builtPoolRadius === poolRadius) {
+        return;
+      }
+
+      builtPoolRadius = poolRadius;
+      mesh.geometry.dispose();
+      mesh.geometry = createCircularWoodFloorGeometry(
+        poolRadius * 2 + woodFloorMargin,
+        poolRadius,
+      );
+    },
+
+    dispose() {
+      scene.remove(mesh);
+      mesh.geometry.dispose();
+      material.dispose();
+      textures.map.dispose();
+      textures.normalMap.dispose();
+      textures.roughnessMap.dispose();
+    },
+  };
 }

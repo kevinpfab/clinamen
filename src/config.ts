@@ -1,46 +1,19 @@
-import { DEFAULT_BOWL_COLLISION_SETTINGS } from "./physics/collision";
-import { DEFAULT_FLOW_SHAPE, maxBasinJetSourceCount, type FlowShape } from "./physics/flow";
+import { maxBasinJetSourceCount } from "./physics/flow";
+
+// Fixed configuration: every value here is decided once, at module load, and
+// never changes for the life of the session. Anything the piece rewrites while
+// running lives in settings.ts instead.
 
 const hasWindow = typeof window !== "undefined";
 const coarsePointer = hasWindow &&
   typeof window.matchMedia === "function" &&
   window.matchMedia("(pointer: coarse)").matches;
 
+// --- Device detection and renderer setup ---
 export const isMobilePerformanceTarget = coarsePointer;
 export const rendererPixelRatioLimit = isMobilePerformanceTarget ? 1.5 : 2;
 export const rendererAntialias = true;
 export const enableSceneShadows = false;
-
-// Runtime-tunable settings. These objects are mutated in place (by the debug
-// panel and flow controls) and read across systems, so they are shared by
-// reference rather than copied.
-export const debugSettings = {
-  masterVolume: 0.88,
-  toneGain: 1.35,
-  impactMomentumFloor: 0.002,
-  // How much wave energy the basin wall returns (0 = the old fully absorbing
-  // rim, 1 = a hard porcelain wall). Some reflection lets ripples cross and
-  // interfere near the rim instead of dying there.
-  wallReflectance: 0.4,
-};
-
-export const simulationSettings = {
-  bowlCount: 100,
-  minRadius: 0.25,
-  maxRadius: 0.5,
-  flowShape: DEFAULT_FLOW_SHAPE as FlowShape,
-};
-
-export const bowlCollisionSettings = {
-  ...DEFAULT_BOWL_COLLISION_SETTINGS,
-  restitution: 0.52,
-};
-
-// World bounds are mutated on resize (see core/world).
-export const world = {
-  width: 18,
-  height: 10,
-};
 
 // --- Bowl geometry ---
 export const goldenRatio = (1 + Math.sqrt(5)) / 2;

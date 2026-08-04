@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "perf": "error",
+    "suspicious": "error"
+  },
+  "rules": {
+    // The factories (createIntroSequence, createPointerController, …) keep their
+    // helpers inside the closure on purpose — they read as part of the object
+    // being built, and none of them are on a hot path.
+    "unicorn/consistent-function-scoping": "off"
+  },
+  "ignorePatterns": ["dist"]
+}

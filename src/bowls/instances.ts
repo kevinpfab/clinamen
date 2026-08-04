@@ -7,13 +7,17 @@ import {
   createInstancedBowlShellGeometry,
   getBowlRimY,
 } from "./geometry";
-import {
-  createBowlResonanceMaterial,
-  createInstancedPorcelainMaterial,
-  reflectionMaterial,
-} from "./materials";
+import type { BowlMaterials } from "./materials";
 
-type InstancedFloatAttribute = THREE.InstancedBufferAttribute;
+// The whole bowl field drawn as three instanced meshes: porcelain shells, their
+// mirrored reflections, and the rim flare. Per-bowl state travels as instanced
+// attributes so the count of bowls costs draw calls, not draws.
+export type BowlInstanceRenderer = {
+  // Added to (and removed from) the scene by the bowl system.
+  objects: THREE.Object3D[];
+  update: (bowls: BowlBody[]) => void;
+  dispose: () => void;
+};
 
 const bowlMatrix = new THREE.Matrix4();
 const bowlPosition = new THREE.Vector3();
@@ -48,129 +52,115 @@ function setBowlMatrix(
   mesh.setMatrixAt(index, bowlMatrix);
 }
 
-export class BowlInstanceRenderer {
-  readonly shells: THREE.InstancedMesh<THREE.BufferGeometry, THREE.MeshPhysicalMaterial>;
-  readonly reflections: THREE.InstancedMesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
-  readonly rims: THREE.InstancedMesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+export function createBowlInstanceRenderer(
+  count: number,
+  materials: BowlMaterials,
+): BowlInstanceRenderer {
+  const capacity = Math.max(1, count);
 
-  readonly objects: THREE.Object3D[];
+  const shellGeometry = createInstancedBowlShellGeometry();
+  const toneRatios = createInstancedFloatAttribute(shellGeometry, "aBowlToneRatio", 1, capacity);
+  const pulseEnvelopes = createInstancedFloatAttribute(shellGeometry, "aBowlPulseEnvelope", 1, capacity);
+  const shellImpactDirections = createInstancedFloatAttribute(shellGeometry, "aBowlImpactDirection", 2, capacity);
 
-  private readonly toneRatios: InstancedFloatAttribute;
-  private readonly pulseEnvelopes: InstancedFloatAttribute;
-  private readonly shellImpactDirections: InstancedFloatAttribute;
-  private readonly rimPulses: InstancedFloatAttribute;
-  private readonly rimImpactDirections: InstancedFloatAttribute;
+  const shells = new THREE.InstancedMesh(
+    shellGeometry,
+    materials.createInstancedPorcelain(),
+    capacity,
+  );
+  shells.name = "Instanced porcelain bowls";
+  shells.count = count;
+  shells.castShadow = false;
+  shells.receiveShadow = true;
+  shells.frustumCulled = false;
 
-  constructor(count: number) {
-    const capacity = Math.max(1, count);
-    const shellGeometry = createInstancedBowlShellGeometry();
-    this.toneRatios = createInstancedFloatAttribute(shellGeometry, "aBowlToneRatio", 1, capacity);
-    this.pulseEnvelopes = createInstancedFloatAttribute(shellGeometry, "aBowlPulseEnvelope", 1, capacity);
-    this.shellImpactDirections = createInstancedFloatAttribute(shellGeometry, "aBowlImpactDirection", 2, capacity);
+  const reflections = new THREE.InstancedMesh(
+    createInstancedBowlReflectionGeometry(),
+    materials.reflection,
+    capacity,
+  );
+  reflections.name = "Instanced bowl reflections";
+  reflections.count = count;
+  reflections.castShadow = false;
+  reflections.receiveShadow = false;
+  reflections.frustumCulled = false;
+  reflections.renderOrder = 0;
 
-    this.shells = new THREE.InstancedMesh(
-      shellGeometry,
-      createInstancedPorcelainMaterial(),
-      capacity,
-    );
-    this.shells.name = "Instanced porcelain bowls";
-    this.shells.count = count;
-    this.shells.castShadow = false;
-    this.shells.receiveShadow = true;
-    this.shells.frustumCulled = false;
+  const rimGeometry = createInstancedBowlRimGeometry();
+  const rimPulses = createInstancedFloatAttribute(rimGeometry, "aRimPulse", 4, capacity);
+  const rimImpactDirections = createInstancedFloatAttribute(rimGeometry, "aRimImpactDirection", 2, capacity);
 
-    this.reflections = new THREE.InstancedMesh(
-      createInstancedBowlReflectionGeometry(),
-      reflectionMaterial,
-      capacity,
-    );
-    this.reflections.name = "Instanced bowl reflections";
-    this.reflections.count = count;
-    this.reflections.castShadow = false;
-    this.reflections.receiveShadow = false;
-    this.reflections.frustumCulled = false;
-    this.reflections.renderOrder = 0;
+  const rims = new THREE.InstancedMesh(rimGeometry, materials.createResonance(), capacity);
+  rims.name = "Instanced bowl impulse rims";
+  rims.count = count;
+  rims.frustumCulled = false;
+  rims.renderOrder = 7;
 
-    const rimGeometry = createInstancedBowlRimGeometry();
-    this.rimPulses = createInstancedFloatAttribute(rimGeometry, "aRimPulse", 4, capacity);
-    this.rimImpactDirections = createInstancedFloatAttribute(rimGeometry, "aRimImpactDirection", 2, capacity);
+  return {
+    objects: [reflections, shells, rims],
 
-    this.rims = new THREE.InstancedMesh(
-      rimGeometry,
-      createBowlResonanceMaterial(),
-      capacity,
-    );
-    this.rims.name = "Instanced bowl impulse rims";
-    this.rims.count = count;
-    this.rims.frustumCulled = false;
-    this.rims.renderOrder = 7;
+    update(bowls: BowlBody[]) {
+      shells.count = bowls.length;
+      reflections.count = bowls.length;
+      rims.count = bowls.length;
 
-    this.objects = [this.reflections, this.shells, this.rims];
-  }
+      for (const bowl of bowls) {
+        const index = bowl.instanceIndex;
+        const resonance = bowl.resonance;
 
-  update(bowls: BowlBody[]) {
-    this.shells.count = bowls.length;
-    this.reflections.count = bowls.length;
-    this.rims.count = bowls.length;
+        setBowlMatrix(shells, index, bowl, bowl.mesh.position.y);
+        // A submerged bowl has no mirror image; grow the reflection back in as
+        // the bowl breaks the surface.
+        setBowlMatrix(
+          reflections,
+          index,
+          bowl,
+          waterPlaneY * 2 - bowl.mesh.position.y,
+          THREE.MathUtils.smoothstep(bowl.emergence, 0.82, 1),
+        );
+        setBowlMatrix(rims, index, bowl, bowl.mesh.position.y + getBowlRimY(bowl.radius));
 
-    for (const bowl of bowls) {
-      const index = bowl.instanceIndex;
-      const resonance = bowl.resonance;
+        toneRatios.setX(index, bowl.toneRatio);
+        pulseEnvelopes.setX(index, resonance.envelope);
+        shellImpactDirections.setXY(
+          index,
+          resonance.impactDirection.x,
+          resonance.impactDirection.y,
+        );
+        // The intro renders the hero's rim flare with a dedicated high-res mesh;
+        // zero this bowl's instanced strength so the two don't stack.
+        rimPulses.setXYZW(
+          index,
+          resonance.age,
+          resonance.lifetime,
+          bowl.rimFlareSuppressed ? 0 : resonance.strength,
+          resonance.toneRatio,
+        );
+        rimImpactDirections.setXY(
+          index,
+          resonance.impactDirection.x,
+          resonance.impactDirection.y,
+        );
+      }
 
-      setBowlMatrix(this.shells, index, bowl, bowl.mesh.position.y);
-      // A submerged bowl has no mirror image; grow the reflection back in as
-      // the bowl breaks the surface.
-      setBowlMatrix(
-        this.reflections,
-        index,
-        bowl,
-        waterPlaneY * 2 - bowl.mesh.position.y,
-        THREE.MathUtils.smoothstep(bowl.emergence, 0.82, 1),
-      );
-      setBowlMatrix(this.rims, index, bowl, bowl.mesh.position.y + getBowlRimY(bowl.radius));
+      shells.instanceMatrix.needsUpdate = true;
+      reflections.instanceMatrix.needsUpdate = true;
+      rims.instanceMatrix.needsUpdate = true;
+      toneRatios.needsUpdate = true;
+      pulseEnvelopes.needsUpdate = true;
+      shellImpactDirections.needsUpdate = true;
+      rimPulses.needsUpdate = true;
+      rimImpactDirections.needsUpdate = true;
+    },
 
-      this.toneRatios.setX(index, bowl.toneRatio);
-      this.pulseEnvelopes.setX(index, resonance.envelope);
-      this.shellImpactDirections.setXY(
-        index,
-        resonance.impactDirection.x,
-        resonance.impactDirection.y,
-      );
-      // The intro renders the hero's rim flare with a dedicated high-res mesh;
-      // zero this bowl's instanced strength so the two don't stack.
-      this.rimPulses.setXYZW(
-        index,
-        resonance.age,
-        resonance.lifetime,
-        bowl.rimFlareSuppressed ? 0 : resonance.strength,
-        resonance.toneRatio,
-      );
-      this.rimImpactDirections.setXY(
-        index,
-        resonance.impactDirection.x,
-        resonance.impactDirection.y,
-      );
-    }
-
-    this.shells.instanceMatrix.needsUpdate = true;
-    this.reflections.instanceMatrix.needsUpdate = true;
-    this.rims.instanceMatrix.needsUpdate = true;
-    this.toneRatios.needsUpdate = true;
-    this.pulseEnvelopes.needsUpdate = true;
-    this.shellImpactDirections.needsUpdate = true;
-    this.rimPulses.needsUpdate = true;
-    this.rimImpactDirections.needsUpdate = true;
-  }
-
-  dispose() {
-    this.shells.geometry.dispose();
-    this.shells.material.dispose();
-    this.reflections.geometry.dispose();
-    this.rims.geometry.dispose();
-    this.rims.material.dispose();
-  }
-}
-
-export function createBowlInstanceRenderer(count: number) {
-  return new BowlInstanceRenderer(count);
+    dispose() {
+      // The reflection material is owned by BowlMaterials and shared, so it is
+      // not disposed here.
+      shells.geometry.dispose();
+      shells.material.dispose();
+      reflections.geometry.dispose();
+      rims.geometry.dispose();
+      rims.material.dispose();
+    },
+  };
 }

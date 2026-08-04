@@ -10,18 +10,18 @@ import {
   maxDragWorldSpeed,
   velocityWorldScale,
 } from "../config";
-import { camera, renderer } from "../core/stage";
-import { applyCameraOrbit, cameraOrbit } from "../core/camera-controls";
+import type { Stage } from "../core/stage";
+import type { CameraControls } from "../core/camera-controls";
 import type { BowlSystem } from "../bowls/system";
 import type { BowlBody } from "../bowls/types";
 import type { CameraOrbitDragState, DragState } from "./types";
-import {
-  emitDragReleaseRipple,
-  updateDragWaterInteraction,
-} from "../water/ripples";
+import type { RippleField } from "../water/ripples";
 
 type PointerControllerDeps = {
+  stage: Stage;
+  cameraControls: CameraControls;
   bowlSystem: BowlSystem;
+  ripples: RippleField;
 };
 
 export type PointerController = {
@@ -36,6 +36,8 @@ const pointerRaycaster = new THREE.Raycaster();
 const waterInteractionPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
 export function createPointerController(deps: PointerControllerDeps): PointerController {
+  const { camera, renderer } = deps.stage;
+  const cameraOrbit = deps.cameraControls.orbit;
   let dragState: DragState | null = null;
   let cameraOrbitDragState: CameraOrbitDragState | null = null;
   let pinchState: { initialDistance: number; initialCameraDistance: number } | null = null;
@@ -54,7 +56,7 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
   }
 
   function syncCamera() {
-    applyCameraOrbit();
+    deps.cameraControls.apply();
   }
 
   function getPointerWaterPoint(event: PointerEvent) {
@@ -144,7 +146,7 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
     state.bowl.mesh.position.z = target.y;
     pushDragSample(state, target, time);
     state.bowl.velocity.copy(getDragVelocity(state));
-    updateDragWaterInteraction(state, previous, target, time);
+    deps.ripples.updateDragWaterInteraction(state, previous, target, time);
   }
 
   function startCameraOrbitDrag(event: PointerEvent) {
@@ -373,7 +375,7 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
     pushDragSample(dragState, releaseTarget, releaseTime);
     releasedBowl.velocity.copy(getDragVelocity(dragState));
     deps.bowlSystem.addMomentum(releasedBowl, releasedBowl.velocity.length() * 4.2);
-    emitDragReleaseRipple(dragState, releaseTime);
+    deps.ripples.emitDragReleaseRipple(dragState, releaseTime);
     releasedBowl.angularVelocity += THREE.MathUtils.clamp(
       releasedBowl.velocity.length() * 0.18,
       0,

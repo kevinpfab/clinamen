@@ -5,98 +5,78 @@ import {
   rendererPixelRatioLimit,
 } from "../config";
 
-// The Stage owns the foundational Three.js singletons — renderer, scene, camera,
-// clock — plus the DOM mount. main.ts creates it before loading scene systems.
+// The Stage owns the foundational Three.js objects — renderer, scene, camera,
+// clock — plus the DOM mount. It is the only thing main.ts builds directly;
+// every scene system is then constructed from it and hands its resources back
+// on dispose.
 export type Stage = {
-  app: HTMLDivElement;
+  container: HTMLDivElement;
   clock: THREE.Clock;
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
+  // The point the camera orbits and looks at; shared with the camera controls.
+  cameraTarget: THREE.Vector3;
+  // The scene's resting background, kept so the intro can fade back to it.
+  backgroundColor: THREE.Color;
+  dispose: () => void;
 };
 
-export let app: HTMLDivElement;
-export let clock: THREE.Clock;
-export let scene: THREE.Scene;
-
-// The point the camera orbits and looks at; shared with the camera controls.
-export const cameraTarget = new THREE.Vector3(0, 0, 0);
-
-export let renderer: THREE.WebGLRenderer;
-export let camera: THREE.PerspectiveCamera;
-let stage: Stage | null = null;
+const stageBackgroundColor = 0xd6c097;
 
 function createRenderer() {
-  const nextRenderer = new THREE.WebGLRenderer({
+  const renderer = new THREE.WebGLRenderer({
     antialias: rendererAntialias,
     alpha: false,
     powerPreference: "high-performance",
   });
-  nextRenderer.setPixelRatio(Math.min(window.devicePixelRatio, rendererPixelRatioLimit));
-  nextRenderer.setSize(window.innerWidth, window.innerHeight);
-  nextRenderer.shadowMap.enabled = enableSceneShadows;
-  nextRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
-  nextRenderer.toneMapping = THREE.ACESFilmicToneMapping;
-  nextRenderer.toneMappingExposure = 1.0;
-  nextRenderer.outputColorSpace = THREE.SRGBColorSpace;
-  return nextRenderer;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, rendererPixelRatioLimit));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = enableSceneShadows;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  return renderer;
 }
 
 function createCamera() {
-  const nextCamera = new THREE.PerspectiveCamera(
+  const camera = new THREE.PerspectiveCamera(
     38,
     window.innerWidth / Math.max(1, window.innerHeight),
     0.1,
     80,
   );
-  nextCamera.position.set(0, 6.8, 8.8);
-  nextCamera.lookAt(cameraTarget);
-  return nextCamera;
+  camera.position.set(0, 6.8, 8.8);
+  camera.lookAt(0, 0, 0);
+  return camera;
 }
 
 export function createStage(): Stage {
-  if (stage) {
-    if (!renderer.domElement.isConnected) {
-      app.appendChild(renderer.domElement);
-    }
-    return stage;
-  }
-
-  const appElement = document.querySelector<HTMLDivElement>("#app");
-  if (!appElement) {
+  const container = document.querySelector<HTMLDivElement>("#app");
+  if (!container) {
     throw new Error("clinamen could not find its app container.");
   }
 
-  app = appElement;
-  clock = new THREE.Clock();
-  scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xd6c097);
-  cameraTarget.set(0, 0, 0);
-  renderer = createRenderer();
-  camera = createCamera();
-  app.appendChild(renderer.domElement);
+  const backgroundColor = new THREE.Color(stageBackgroundColor);
+  const scene = new THREE.Scene();
+  scene.background = backgroundColor.clone();
 
-  stage = {
-    app,
-    clock,
+  const renderer = createRenderer();
+  container.appendChild(renderer.domElement);
+
+  return {
+    container,
+    clock: new THREE.Clock(),
     scene,
     renderer,
-    camera,
+    camera: createCamera(),
+    cameraTarget: new THREE.Vector3(0, 0, 0),
+    backgroundColor,
+    dispose() {
+      renderer.domElement.remove();
+      renderer.dispose();
+      scene.clear();
+    },
   };
-  return stage;
-}
-
-export function disposeStage() {
-  if (!stage) {
-    return;
-  }
-
-  renderer.domElement.remove();
-  renderer.dispose();
-  scene.clear();
-  stage = null;
-}
-
-export function renderScene() {
-  renderer.render(scene, camera);
 }

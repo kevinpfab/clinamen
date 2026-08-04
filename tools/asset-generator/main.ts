@@ -1,40 +1,20 @@
 import * as THREE from "three";
-// Reuse the piece's real bowl geometry so the generated marks match what the
-// visitor actually sees on the water.
+// The mark is the piece's own bowl, under the piece's own light: geometry,
+// porcelain, and light rig are all imported rather than mirrored, so retuning
+// any of them retunes the favicon and the OG card too. None of these three
+// modules touches the water-simulation uniform chain — that is why they are
+// separate from bowls/materials.ts, which does.
 import { createInstancedBowlShellGeometry } from "../../src/bowls/geometry";
-
-// --- Porcelain look, mirrored from src/bowls/materials.ts --------------------
-// Kept as local constants (rather than importing the shared material) so the
-// generator stays clear of the water-simulation uniform chain that module pulls
-// in. If the piece's porcelain is retuned, mirror the change here.
-const porcelainBaseColor = 0xf4efe3;
-const porcelainBaseRoughness = 0.54;
-const porcelainBaseClearcoat = 0.42;
+import { porcelainSurface } from "../../src/bowls/porcelain";
+import { createWorldLights } from "../../src/core/lighting";
 
 function createPorcelainMaterial() {
-  return new THREE.MeshPhysicalMaterial({
-    color: porcelainBaseColor,
-    roughness: porcelainBaseRoughness,
-    metalness: 0,
-    clearcoat: porcelainBaseClearcoat,
-    clearcoatRoughness: 0.28,
-    reflectivity: 0.48,
-    ior: 1.48,
-    side: THREE.DoubleSide,
-  });
+  return new THREE.MeshPhysicalMaterial(porcelainSurface);
 }
 
-// Lighting mirrored from src/core/lighting.ts (only the two lights that
-// actually contribute — fill/rim ship at intensity 0).
 function addLighting(scene: THREE.Scene) {
-  const hemisphere = new THREE.HemisphereLight(0xf7ffff, 0x006f90, 1.25);
-  scene.add(hemisphere);
-
-  const key = new THREE.DirectionalLight(0xfff2dc, 3.35);
-  key.position.set(-1.45, 12, 0.95);
-  key.up.set(0, 0, 1);
-  scene.add(key);
-  scene.add(key.target);
+  const { hemisphere, key } = createWorldLights();
+  scene.add(hemisphere, key, key.target);
 }
 
 // --- Scene -------------------------------------------------------------------

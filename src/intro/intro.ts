@@ -1,19 +1,17 @@
 import * as THREE from "three";
-import { camera, cameraTarget, renderer, scene } from "../core/stage";
+import type { Stage } from "../core/stage";
 import {
-  applyCameraOrbit,
-  cameraOrbit,
   getPoolFitDistance,
   getResponsiveCameraDefaults,
+  type CameraControls,
 } from "../core/camera-controls";
 import { getWaterSurfaceRadius } from "../core/world";
 import { pseudoRandom } from "../core/math";
 import type { LightingSystem } from "../core/lighting";
-import { getBowlCenterLimit } from "../bowls/tuning";
 import { createHeroBowlRimGeometry, getBowlRimY } from "../bowls/geometry";
-import { createBowlHeroResonanceMaterial } from "../bowls/materials";
+import type { BowlMaterials } from "../bowls/materials";
 import { heroBowlRimSegments } from "../config";
-import { waterUniforms } from "../water/uniforms";
+import type { SharedWaterUniforms } from "../water/uniforms";
 import { triggerBowlResonance } from "../bowls/resonance";
 import type { BowlBody } from "../bowls/types";
 import type { BowlSystem } from "../bowls/system";
@@ -80,9 +78,13 @@ const pointerRaycaster = new THREE.Raycaster();
 const waterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
 type IntroSequenceDeps = {
+  stage: Stage;
+  cameraControls: CameraControls;
   bus: EventBus<BasinEvents>;
   bowlSystem: BowlSystem;
   lighting: LightingSystem;
+  materials: BowlMaterials;
+  waterUniforms: SharedWaterUniforms;
   startAudio: () => Promise<void>;
   onComplete: () => void;
 };
@@ -151,88 +153,32 @@ function createOverlay() {
   return overlay;
 }
 
-export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
+export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence | null {
+  const { camera, cameraTarget, renderer, scene } = deps.stage;
+  const orbit = deps.cameraControls.orbit;
   const bowls = deps.bowlSystem.bowls;
+  // reduce() with no seed throws on an empty array. The bowl count cannot reach
+  // zero today, but the intro is meaningless without a hero bowl either way, so
+  // it declines to run rather than taking the whole scene down with it.
+  if (bowls.length === 0) {
+    return null;
+  }
   const hero = bowls.reduce((largest, bowl) =>
     bowl.radius > largest.radius ? bowl : largest,
   );
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // The hero sits at the pool's center for the title composition. Neighbors
-  // it would overlap are moved to spots verified clear of every other bowl,
-  // so the layout stays collision-free and nothing shifts while the whole
-  // simulation waits, frozen, for the last bowl to surface.
+  // The hero sits at the pool's center for the title composition. Moving it
+  // there can push it through its neighbors, so the layout is relaxed again
+  // with the hero pinned: nothing may shift while the whole simulation waits,
+  // frozen, for the last bowl to surface, so every pair has to clear now.
   hero.mesh.position.x = 0;
   hero.mesh.position.z = 0;
   hero.velocity.set(0, 0);
   const heroX = 0;
   const heroZ = 0;
   deps.bowlSystem.setFrozen(true);
-
-  // The spawn scatter can leave overlapping pairs (its sampler falls back to
-  // an unchecked center ring when the pool is crowded). The live simulation
-  // used to separate those within a frame; frozen, they would surface visibly
-  // intersecting. Relax the layout until every pair clears, with the centered
-  // hero immovable.
-  function clampToBasin(bowl: BowlBody) {
-    const limit = getBowlCenterLimit(bowl.radius);
-    const length = Math.hypot(bowl.mesh.position.x, bowl.mesh.position.z);
-    if (length > limit) {
-      const scale = limit / length;
-      bowl.mesh.position.x *= scale;
-      bowl.mesh.position.z *= scale;
-    }
-  }
-
-  for (let iteration = 0; iteration < 120; iteration += 1) {
-    let separated = true;
-    for (let i = 0; i < bowls.length; i += 1) {
-      for (let j = i + 1; j < bowls.length; j += 1) {
-        const a = bowls[i];
-        const b = bowls[j];
-        const gap = a.contactRadius + b.contactRadius + 0.06;
-        const dx = b.mesh.position.x - a.mesh.position.x;
-        const dz = b.mesh.position.z - a.mesh.position.z;
-        const distance = Math.hypot(dx, dz);
-        if (distance >= gap) {
-          continue;
-        }
-
-        separated = false;
-        let normalX: number;
-        let normalZ: number;
-        if (distance > 0.001) {
-          normalX = dx / distance;
-          normalZ = dz / distance;
-        } else {
-          const angle = pseudoRandom(a.id * 13.7 + b.id * 3.1 + iteration * 0.7) * Math.PI * 2;
-          normalX = Math.cos(angle);
-          normalZ = Math.sin(angle);
-        }
-
-        const shortfall = gap - distance;
-        if (a === hero || b === hero) {
-          const mover = a === hero ? b : a;
-          const sign = a === hero ? 1 : -1;
-          mover.mesh.position.x += normalX * shortfall * sign;
-          mover.mesh.position.z += normalZ * shortfall * sign;
-          clampToBasin(mover);
-        } else {
-          const push = shortfall * 0.55;
-          a.mesh.position.x -= normalX * push;
-          a.mesh.position.z -= normalZ * push;
-          b.mesh.position.x += normalX * push;
-          b.mesh.position.z += normalZ * push;
-          clampToBasin(a);
-          clampToBasin(b);
-        }
-      }
-    }
-
-    if (separated) {
-      break;
-    }
-  }
+  deps.bowlSystem.separate(hero);
 
   const emergenceEntries: EmergenceEntry[] = [];
   let maxHeroDistance = 0.001;
@@ -277,7 +223,7 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
   // and torn down at hand-off, when the hero rejoins the instanced field.
   const heroRim = new THREE.Mesh(
     createHeroBowlRimGeometry(heroBowlRimSegments),
-    createBowlHeroResonanceMaterial(),
+    deps.materials.createHeroResonance(),
   );
   heroRim.frustumCulled = false;
   heroRim.renderOrder = 7;
@@ -324,12 +270,12 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
   deps.lighting.hemisphere.intensity = 0;
   deps.lighting.key.intensity = 0;
 
-  const originalBackground = (scene.background as THREE.Color).clone();
+  const originalBackground = deps.stage.backgroundColor.clone();
   const introBackground = new THREE.Color(0x000000);
   const workingBackground = introBackground.clone();
   scene.background = workingBackground;
   renderer.toneMappingExposure = titleExposure;
-  waterUniforms.uSceneDim.value = Math.pow(titleExposure, sceneDimExponent);
+  deps.waterUniforms.uSceneDim.value = Math.pow(titleExposure, sceneDimExponent);
 
   document.body.classList.add("is-intro");
   const overlay = createOverlay();
@@ -474,7 +420,7 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
   function applyDarkness(progress: number) {
     const exposure = logLerp(titleExposure, 1, progress);
     renderer.toneMappingExposure = exposure;
-    waterUniforms.uSceneDim.value = Math.pow(exposure, sceneDimExponent);
+    deps.waterUniforms.uSceneDim.value = Math.pow(exposure, sceneDimExponent);
     workingBackground.lerpColors(introBackground, originalBackground, progress);
     deps.lighting.hemisphere.intensity = baseHemisphereIntensity * progress;
     deps.lighting.key.intensity = baseKeyIntensity * progress;
@@ -484,7 +430,7 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
 
   function restoreLighting() {
     renderer.toneMappingExposure = 1;
-    waterUniforms.uSceneDim.value = 1;
+    deps.waterUniforms.uSceneDim.value = 1;
     scene.background = originalBackground;
     deps.lighting.hemisphere.intensity = baseHemisphereIntensity;
     deps.lighting.key.intensity = baseKeyIntensity;
@@ -498,12 +444,12 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence {
     handOffAt = time;
     removeListeners();
     const pose = getOverviewPose();
-    cameraOrbit.azimuth = 0;
-    cameraOrbit.pitch = THREE.MathUtils.clamp(pose.pitch, cameraOrbit.minPitch, cameraOrbit.maxPitch);
-    cameraOrbit.distance = THREE.MathUtils.clamp(pose.distance, cameraOrbit.minDistance, cameraOrbit.maxDistance);
-    cameraOrbit.hasUserControl = false;
+    orbit.azimuth = 0;
+    orbit.pitch = THREE.MathUtils.clamp(pose.pitch, orbit.minPitch, orbit.maxPitch);
+    orbit.distance = THREE.MathUtils.clamp(pose.distance, orbit.minDistance, orbit.maxDistance);
+    orbit.hasUserControl = false;
     cameraTarget.set(0, 0, 0);
-    applyCameraOrbit();
+    deps.cameraControls.apply();
     restoreLighting();
     teardownHeroRim();
     document.body.classList.remove("is-intro");

@@ -7,14 +7,29 @@ import {
   maxRipples,
   waterSimulationSize,
 } from "../config";
-import { waterUniforms } from "../water/uniforms";
+import type { SharedWaterUniforms } from "../water/uniforms";
+import { porcelainSurface } from "./porcelain";
+import {
+  basinMaskChunk,
+  gaussianChunk,
+  simulationUvChunk,
+} from "../water/shader-chunks";
 
-// Porcelain bowl materials plus the water-reflection and resonance-pulse shaders.
-export const porcelainBaseColor = new THREE.Color(0xf4efe3);
-export const porcelainPulseWarmColor = new THREE.Color(0xff9f72);
-export const porcelainPulseCoolColor = new THREE.Color(0x70f4ff);
-export const porcelainBaseRoughness = 0.54;
-export const porcelainBaseClearcoat = 0.42;
+// Porcelain bowl materials plus the water-reflection and resonance-pulse
+// shaders. The reflection reads the shared water uniforms, so the whole set is
+// built per app rather than at module scope.
+export type BowlMaterials = {
+  // Shared by every instanced reflection mesh; the only material here bound to
+  // the water uniforms.
+  reflection: THREE.ShaderMaterial;
+  createInstancedPorcelain: () => THREE.MeshPhysicalMaterial;
+  createResonance: () => THREE.ShaderMaterial;
+  createHeroResonance: () => THREE.ShaderMaterial;
+  dispose: () => void;
+};
+
+const porcelainPulseWarmColor = new THREE.Color(0xff9f72);
+const porcelainPulseCoolColor = new THREE.Color(0x70f4ff);
 export const bowlResonancePulseLifetime = 0.68;
 const bowlPulseEnvelopeLimit = 1.25 * bowlImpactColorIntensity;
 const bowlPulseMixLimit = THREE.MathUtils.clamp(0.64 * bowlImpactColorIntensity, 0.64, 0.92);
@@ -27,26 +42,16 @@ const reflectionRefractionOffsetLimit = 0.115;
 const reflectionEdgeFeatherMin = 0.055;
 const reflectionEdgeFeatherMax = 0.135;
 
-export const porcelainMaterial = new THREE.MeshPhysicalMaterial({
-  color: porcelainBaseColor,
-  roughness: porcelainBaseRoughness,
-  metalness: 0,
-  clearcoat: porcelainBaseClearcoat,
-  clearcoatRoughness: 0.28,
+// The surface comes from porcelain.ts, which the asset generator shares; the
+// emissive channel is the piece's own, driven by the resonance pulse below.
+const porcelainSettings: THREE.MeshPhysicalMaterialParameters = {
+  ...porcelainSurface,
   emissive: 0x000000,
   emissiveIntensity: 1,
-  reflectivity: 0.48,
-  ior: 1.48,
-  side: THREE.DoubleSide,
-});
+};
 
-export function createInstancedPorcelainMaterial() {
-  const material = porcelainMaterial.clone();
-  material.color.copy(porcelainBaseColor);
-  material.emissive.set(0x000000);
-  material.roughness = porcelainBaseRoughness;
-  material.clearcoat = porcelainBaseClearcoat;
-  material.clearcoatRoughness = 0.28;
+function createInstancedPorcelainMaterial() {
+  const material = new THREE.MeshPhysicalMaterial(porcelainSettings);
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uBowlPulseWarmColor = { value: porcelainPulseWarmColor };
     shader.uniforms.uBowlPulseCoolColor = { value: porcelainPulseCoolColor };
@@ -112,28 +117,13 @@ totalEmissiveRadiance += bowlPulseColor * bowlPulseEnvelope * (${bowlPulseEmissi
   return material;
 }
 
-export const reflectionMaterial = new THREE.ShaderMaterial({
-  uniforms: {
-    uTime: waterUniforms.uTime,
-    uHeightMap: waterUniforms.uHeightMap,
-    uInteractionFieldMap: waterUniforms.uInteractionFieldMap,
-    uSimWorld: waterUniforms.uSimWorld,
-    uPoolData: waterUniforms.uPoolData,
-    uRippleCenters: waterUniforms.uRippleCenters,
-    uRippleData: waterUniforms.uRippleData,
-    uRippleCount: waterUniforms.uRippleCount,
-    uFlowJetData: waterUniforms.uFlowJetData,
-    uFlowJetParams: waterUniforms.uFlowJetParams,
-    uFlowJetCount: waterUniforms.uFlowJetCount,
-    uSceneDim: waterUniforms.uSceneDim,
-    uOpacity: { value: 0.5 },
-  },
-  vertexShader: `
+const reflectionVertexShader = `
     uniform float uTime;
     uniform sampler2D uHeightMap;
     uniform sampler2D uInteractionFieldMap;
     uniform vec4 uSimWorld;
     uniform vec4 uPoolData;
+    uniform float uWaveSpeed;
     uniform vec4 uRippleCenters[${maxRipples}];
     uniform vec4 uRippleData[${maxRipples}];
     uniform int uRippleCount;
@@ -146,16 +136,9 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
     varying float vWaterMotion;
     varying vec2 vRefractionOffset;
 
-    float basinMask(vec2 p) {
-      float radius = max(uPoolData.z, 0.001);
-      float softness = clamp(uPoolData.w * 0.22, 0.060, 0.180);
-      float d = length(p - uPoolData.xy);
-      return 1.0 - smoothstep(radius - softness, radius, d);
-    }
-
-    vec2 simulationUv(vec2 p) {
-      return (p - uSimWorld.xy) / max(uSimWorld.zw, vec2(0.001));
-    }
+    ${gaussianChunk}
+    ${basinMaskChunk}
+    ${simulationUvChunk}
 
     vec3 simulatedStateAtUv(vec2 uv) {
       vec2 safeUv = clamp(uv, 0.001, 0.999);
@@ -193,6 +176,19 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
       return -slope * (0.026 + clamp(interactionEnergy, 0.0, 1.0) * 0.030);
     }
 
+    // The reflection's own reading of the ripple field. It cannot sample the
+    // interaction field's height at vertex rate with enough precision to
+    // recover a usable gradient, so it re-derives the wave envelopes directly
+    // from the ripple uniforms — the same envelopes water/interaction-field.ts
+    // integrates, at the same wave speed, fade, and widths, so a reflection
+    // bends over the ring that is actually there.
+    //
+    // What it deliberately leaves out, because a reflected bowl only needs the
+    // dominant bend and this runs per vertex: the recovery crest and tail of
+    // the radial packet, the directional spread of the young front, the
+    // compression pulse, and the valueNoise term that gives the water's rings
+    // their organic edge (no noise source in this shader). Amplitudes below are
+    // the reflection's own — they scale a world-space offset, not a height.
     vec2 explicitRippleRefraction(vec2 p, out float rippleEnergy) {
       vec2 refraction = vec2(0.0);
       rippleEnergy = 0.0;
@@ -213,24 +209,26 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
         vec2 tangent = vec2(-direction.y, direction.x);
         vec2 offset = p - center;
         float progress = clamp(age / lifetime, 0.0, 1.0);
-        float fade = pow(1.0 - progress, 1.55) * smoothstep(0.0, 0.055, age);
+        float ageGate = smoothstep(0.0, 0.055, age);
 
         if (shape > 0.5) {
           float motion = clamp(directionLength - 1.0, 0.0, 1.0);
           float behind = max(-dot(offset, direction), 0.0);
           float across = dot(offset, tangent);
+          float fade = pow(1.0 - progress, 1.70) * ageGate;
           float radiusHint = 0.24 + strength * 0.42 + motion * 0.22;
           float travel = age * (0.92 + strength * 0.26 + motion * 0.34);
           float packetWidth = radiusHint * (0.82 + motion * 0.24) + progress * 0.36;
-          float packet = exp(-pow((behind - travel) / max(packetWidth, 0.001), 2.0));
-          float wakeWidth = radiusHint * (0.34 + progress * 0.32) + behind * 0.030;
+          float packet = expFalloff(behind - travel, packetWidth);
+          float divergentWidth = radiusHint * (0.24 + progress * 0.32) + behind * 0.018;
           float divergentLine = abs(across) - behind * mix(0.36, 0.52, motion);
-          float divergent = exp(-pow(divergentLine / max(wakeWidth, 0.001), 2.0));
-          divergent *= smoothstep(0.0, radiusHint * 0.45 + 0.055, behind);
-          divergent *= exp(-behind / (3.0 + motion * 1.55)) * packet * fade;
-          float transverse = exp(-pow(across / max(radiusHint * 1.25 + behind * 0.16, 0.001), 2.0));
-          transverse *= smoothstep(0.0, radiusHint * 0.52 + 0.065, behind);
-          transverse *= exp(-behind / (2.4 + motion * 1.2)) * packet * fade;
+          float divergent = expFalloff(divergentLine, divergentWidth);
+          divergent *= smoothstep(0.0, radiusHint * 0.42 + 0.055, behind);
+          divergent *= exp(-behind / (3.00 + motion * 1.55)) * packet * fade;
+          float transverseWidth = radiusHint * (1.18 + motion * 0.48) + behind * 0.19;
+          float transverse = expFalloff(across, transverseWidth);
+          transverse *= smoothstep(0.0, radiusHint * 0.55 + 0.070, behind);
+          transverse *= exp(-behind / (2.30 + motion * 1.12)) * packet * fade;
           float side = across < 0.0 ? -1.0 : 1.0;
           float amplitude = strength * (0.026 + motion * 0.016);
           refraction += (-direction * transverse * 0.70 + tangent * side * divergent * 0.55) * amplitude;
@@ -240,13 +238,13 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
 
         float d = length(offset);
         vec2 radial = d > 0.001 ? offset / d : direction;
-        float waveSpeed = 1.08 + strength * 0.42;
-        float travel = age * waveSpeed;
+        float fade = pow(1.0 - progress, 1.62) * ageGate;
+        float travel = age * uWaveSpeed;
         float packetWidth = 0.130 + progress * 0.220 + strength * 0.036;
         float signedDistance = d - travel;
-        float packet = exp(-pow(signedDistance / max(packetWidth, 0.001), 2.0));
-        float crest = exp(-pow(signedDistance / max(packetWidth * 0.42, 0.001), 2.0));
-        float trough = exp(-pow((signedDistance + packetWidth * 0.64) / max(packetWidth * 0.58, 0.001), 2.0));
+        float packet = expFalloff(signedDistance, packetWidth);
+        float crest = expFalloff(signedDistance, packetWidth * 0.42);
+        float trough = expFalloff(signedDistance + packetWidth * 0.64, packetWidth * 0.58);
         float carrier = sin(signedDistance * mix(28.0, 18.0, progress));
         float ripple = (crest - trough * 0.72 + carrier * packet * 0.12) * strength * fade;
         float distanceDamp = inversesqrt(1.0 + d * 0.78);
@@ -257,6 +255,11 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
       return refraction;
     }
 
+    // The jet-wake counterpart, mirroring flowRippleField in
+    // water/interaction-field.ts envelope for envelope and phase for phase. It
+    // keeps the center and shoulder waves and the nozzle, and drops the
+    // cross-ripple turbulence thread, which is below the resolution of a
+    // reflection.
     vec2 flowJetRefraction(vec2 p, out float flowEnergy) {
       vec2 refraction = vec2(0.0);
       flowEnergy = 0.0;
@@ -277,17 +280,17 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
         vec2 offset = p - source;
         float along = dot(offset, direction);
         float across = dot(offset, tangent);
-        float downstream = smoothstep(-radius * 0.16, radius * 0.62, along);
+        float downstream = smoothstep(-radius * 0.16, radius * 0.60, along);
         float activeAlong = max(along, 0.0);
         float lateralSpread = radius * (0.86 + activeAlong * 0.085);
         float centerEnvelope = downstream
-          * exp(-pow(across / max(lateralSpread, 0.001), 2.0))
+          * expFalloff(across, lateralSpread)
           * exp(-activeAlong / (radius * 7.8));
         float shoulderDistance = abs(across) - radius * (0.72 + activeAlong * 0.022);
         float shoulderEnvelope = downstream
-          * exp(-pow(shoulderDistance / (radius * 0.38 + activeAlong * 0.014), 2.0))
+          * expFalloff(shoulderDistance, radius * 0.38 + activeAlong * 0.014)
           * exp(-activeAlong / (radius * 6.2));
-        float nozzle = exp(-pow(length(offset) / (radius * 1.18), 2.0));
+        float nozzle = expFalloff(length(offset), radius * 1.18);
         float centerWave = sin(activeAlong / radius * 3.10 - uTime * 1.86 + phase * 1.71) * centerEnvelope;
         float shoulderWave = sin(activeAlong / radius * 5.20 - uTime * 2.42 + abs(across) / radius * 0.78 + phase) * shoulderEnvelope;
         float side = across < 0.0 ? -1.0 : 1.0;
@@ -343,8 +346,9 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
       vRefractionOffset = refractionOffset;
       gl_Position = projectionMatrix * viewMatrix * worldPosition;
     }
-  `,
-  fragmentShader: `
+`;
+
+const reflectionFragmentShader = `
     precision highp float;
 
     uniform float uOpacity;
@@ -381,12 +385,34 @@ export const reflectionMaterial = new THREE.ShaderMaterial({
       }
       gl_FragColor = vec4(color * uSceneDim, alpha);
     }
-  `,
-  transparent: true,
-  depthWrite: false,
-  side: THREE.DoubleSide,
-  toneMapped: false,
-});
+`;
+
+function createReflectionMaterial(uniforms: SharedWaterUniforms) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: uniforms.uTime,
+      uHeightMap: uniforms.uHeightMap,
+      uInteractionFieldMap: uniforms.uInteractionFieldMap,
+      uSimWorld: uniforms.uSimWorld,
+      uPoolData: uniforms.uPoolData,
+      uWaveSpeed: uniforms.uWaveSpeed,
+      uRippleCenters: uniforms.uRippleCenters,
+      uRippleData: uniforms.uRippleData,
+      uRippleCount: uniforms.uRippleCount,
+      uFlowJetData: uniforms.uFlowJetData,
+      uFlowJetParams: uniforms.uFlowJetParams,
+      uFlowJetCount: uniforms.uFlowJetCount,
+      uSceneDim: uniforms.uSceneDim,
+      uOpacity: { value: 0.5 },
+    },
+    vertexShader: reflectionVertexShader,
+    fragmentShader: reflectionFragmentShader,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
+}
 
 // The rim-flare fragment is shared: the instanced field rims feed it per-bowl
 // state through attributes, the hero's intro rim feeds it through uniforms, but
@@ -402,6 +428,8 @@ const bowlResonanceFragmentShader = `
       varying vec2 vImpactDirection;
 
       const float BASIN_PI = 3.14159265359;
+
+      ${gaussianChunk}
 
       void main() {
         float age = vRimPulse.x;
@@ -427,8 +455,8 @@ const bowlResonanceFragmentShader = `
         float contactAngle = acos(clamp(dot(vRadial, impactDirection), -1.0, 1.0));
         float travel = smoothstep(0.0, 0.82, progress) * BASIN_PI;
         float frontWidth = mix(0.240, 0.520, progress) + pulseStrength * 0.070;
-        float leadingWave = exp(-pow((contactAngle - travel) / max(frontWidth, 0.001), 2.0));
-        float contactSpark = exp(-pow(contactAngle / 0.380, 2.0)) * (1.0 - smoothstep(0.0, 0.34, progress));
+        float leadingWave = expFalloff(contactAngle - travel, frontWidth);
+        float contactSpark = expFalloff(contactAngle, 0.380) * (1.0 - smoothstep(0.0, 0.34, progress));
         float traveledAfterglow = 1.0 - smoothstep(travel - 0.100, travel + 0.420, contactAngle);
         traveledAfterglow *= smoothstep(0.025, 0.220, progress);
         float circumferencePulse = leadingWave * 1.86 + traveledAfterglow * 0.94 + contactSpark * 1.82;
@@ -468,7 +496,7 @@ const bowlResonanceMaterialSettings: THREE.ShaderMaterialParameters = {
   toneMapped: false,
 };
 
-export function createBowlResonanceMaterial() {
+function createBowlResonanceMaterial() {
   return new THREE.ShaderMaterial({
     ...bowlResonanceMaterialSettings,
     // The flat field rims fade at the pool-facing edge, r = 1.
@@ -506,7 +534,7 @@ export function createBowlResonanceMaterial() {
 
 // The intro's dedicated hero rim is a single non-instanced mesh, so its pulse
 // state arrives as uniforms rather than per-instance attributes.
-export function createBowlHeroResonanceMaterial() {
+function createBowlHeroResonanceMaterial() {
   return new THREE.ShaderMaterial({
     ...bowlResonanceMaterialSettings,
     uniforms: {
@@ -542,7 +570,16 @@ export function createBowlHeroResonanceMaterial() {
   });
 }
 
-export function disposeBowlSharedMaterials() {
-  porcelainMaterial.dispose();
-  reflectionMaterial.dispose();
+export function createBowlMaterials(uniforms: SharedWaterUniforms): BowlMaterials {
+  const reflection = createReflectionMaterial(uniforms);
+
+  return {
+    reflection,
+    createInstancedPorcelain: createInstancedPorcelainMaterial,
+    createResonance: createBowlResonanceMaterial,
+    createHeroResonance: createBowlHeroResonanceMaterial,
+    dispose() {
+      reflection.dispose();
+    },
+  };
 }

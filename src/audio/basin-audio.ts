@@ -1,12 +1,25 @@
 import * as THREE from "three";
-import { debugSettings } from "../config";
+import { debugSettings } from "../settings";
 import type { ActiveAudioVoice, HoldableAudioParam } from "./types";
 import { scaleSteps } from "./scale";
 
 // Procedural singing-bowl synthesis: each collision spawns a short-lived voice
 // of detuned sine partials plus a noise transient, with voice limiting and a
 // feedback-delay tail for a soft, non-repetitive sound field.
-export class BasinAudio {
+export type BasinAudio = {
+  readonly isRunning: boolean;
+  resume: () => Promise<void>;
+  setMasterVolume: (volume: number) => void;
+  setToneGain: (gain: number) => void;
+  play: (sizeRatio: number, strength: number, sustain?: number) => void;
+  dispose: () => Promise<void>;
+};
+
+export function createBasinAudio(): BasinAudio {
+  return new BasinAudioEngine();
+}
+
+class BasinAudioEngine implements BasinAudio {
   private context: AudioContext;
   private output: GainNode;
   private delay: DelayNode;
@@ -56,7 +69,7 @@ export class BasinAudio {
     this.toneGain = THREE.MathUtils.clamp(gain, 0.25, 3);
   }
 
-  async close() {
+  async dispose() {
     for (const voice of this.activeVoices.splice(0)) {
       window.clearTimeout(voice.timeoutId);
       voice.gain.disconnect();

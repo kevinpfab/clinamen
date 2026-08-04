@@ -5,8 +5,11 @@
 - Full-viewport Three.js basin with circular water, basin floor, wood surround, flow jets, porcelain bowl instancing, reflections, and GPU water/interaction fields.
 - Default production density is 100 bowls, with public controls for 10, 50, and 100 bowls plus current pattern selection.
 - Interaction includes camera orbit, wheel zoom, pinch zoom, bowl dragging, and velocity-aware release wakes.
-- Audio starts from a minimal permission button or the first scene gesture. Frame/GPU diagnostics are development/query-param tooling, not production UI.
-- Runtime ownership is organized around a composition root plus bowl, input, water, environment, UI, and audio modules with explicit disposal paths.
+- The piece opens on a title sequence: the visitor strikes the hero bowl three times to begin, and the pool emerges from black. `?skipIntro` hands straight to the pointer instead.
+- Audio starts from the first scene gesture — the intro's opening strike doubles as the unlock, so there is no permission button. Frame/GPU diagnostics are development/query-param tooling, not production UI.
+- Runtime ownership flows from one root: `main.ts` builds the Stage, `createApp` builds everything else from it. Every system is a `createX(deps)` factory, and anything holding GPU, DOM, or audio resources exposes `dispose()`, so a hot reload, a WebGL context-loss rebuild, and a page unload all follow the same teardown path.
+- WebGL context loss is caught and recovered on the same Stage; construction failure and unrecoverable loss both surface the `#basin-fallback` message.
+- Shadows are configured but disabled (`enableSceneShadows`): the piece reads as physical through reflection, refraction, and the wave fields instead, and skipping shadow maps buys the frame budget those fields spend.
 
 ## Vision
 
@@ -188,6 +191,7 @@ Acceptance criteria:
 - Water color: vivid stylized pool-blue, like a heightened movie image.
 - Collision ripples: subtle visible ripples.
 - Debug mode: include development-only tuning controls.
+- Reduced motion: deliberately not honored in the main scene. The piece *is* the motion — a still pool is not a calmer version of this work, it is a different one, and there is no reduced state that remains the piece. The intro title sequence does honor `prefers-reduced-motion`, because that one is an animation over content and has somewhere calm to land.
 
 ## Remaining Creative Questions
 

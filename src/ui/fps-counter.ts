@@ -22,7 +22,7 @@ export type FpsCounterDiagnostics = {
 
 export type FpsCounter = {
   update: (now?: number, diagnostics?: FpsCounterDiagnostics) => void;
-  destroy: () => void;
+  dispose: () => void;
 };
 
 function formatNumber(value: number) {
@@ -142,7 +142,7 @@ export function createFpsCounter(): FpsCounter {
       frameCount = 0;
       lastSampleAt = now;
     },
-    destroy() {
+    dispose() {
       element.remove();
     },
   };

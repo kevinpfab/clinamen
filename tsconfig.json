@@ -12,8 +12,9 @@
     "forceConsistentCasingInFileNames": true,
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,
+    "types": ["bun"],
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "tests", "tools", "vite.config.ts"]
 }

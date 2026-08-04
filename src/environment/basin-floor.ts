@@ -1,13 +1,22 @@
 import * as THREE from "three";
 import { circularPoolSegments } from "../config";
-import { scene } from "../core/stage";
-import { waterUniforms } from "../water/uniforms";
-import { noisePeriod } from "../water/noise-texture";
+import type { SharedWaterUniforms } from "../water/uniforms";
+import { simulationUvChunk, valueNoiseChunk } from "../water/shader-chunks";
 
 // The shaded basin floor seen through the translucent water.
-export const basinFloorMaterial = new THREE.ShaderMaterial({
-  uniforms: waterUniforms,
-  vertexShader: `
+export type BasinFloor = {
+  setRadius: (radius: number) => void;
+  dispose: () => void;
+};
+
+type BasinFloorDeps = {
+  scene: THREE.Scene;
+  uniforms: SharedWaterUniforms;
+};
+
+const basinFloorY = -0.58;
+
+const basinFloorVertexShader = `
     varying vec2 vUv;
     varying vec3 vWorldPosition;
 
@@ -17,8 +26,9 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
       vWorldPosition = worldPosition.xyz;
       gl_Position = projectionMatrix * viewMatrix * worldPosition;
     }
-  `,
-  fragmentShader: `
+`;
+
+const basinFloorFragmentShader = `
     precision highp float;
 
     uniform float uTime;
@@ -33,9 +43,7 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
     varying vec2 vUv;
     varying vec3 vWorldPosition;
 
-    float valueNoise(vec2 p) {
-      return texture2D(uNoiseMap, p * ${(1 / noisePeriod).toFixed(6)}).r;
-    }
+    ${valueNoiseChunk}
 
     float basinDepthField(vec2 p) {
       float radius = max(uPoolData.z, 0.001);
@@ -49,9 +57,7 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
       return smoothstep(0.72, 1.0, normalizedRadius);
     }
 
-    vec2 simulationUv(vec2 p) {
-      return (p - uSimWorld.xy) / max(uSimWorld.zw, vec2(0.001));
-    }
+    ${simulationUvChunk}
 
     vec4 sampledWaveState(vec2 p) {
       return texture2D(uWaveStateMap, clamp(simulationUv(p), 0.001, 0.999));
@@ -136,19 +142,31 @@ export const basinFloorMaterial = new THREE.ShaderMaterial({
 
       gl_FragColor = vec4(color * uSceneDim, 1.0);
     }
-  `,
-});
-export const basinFloor = new THREE.Mesh(
-  new THREE.CircleGeometry(1, circularPoolSegments),
-  basinFloorMaterial,
-);
-basinFloor.rotation.x = -Math.PI / 2;
-basinFloor.position.y = -0.58;
-basinFloor.receiveShadow = false;
-scene.add(basinFloor);
+`;
 
-export function disposeBasinFloor() {
-  scene.remove(basinFloor);
-  basinFloor.geometry.dispose();
-  basinFloorMaterial.dispose();
+export function createBasinFloor({ scene, uniforms }: BasinFloorDeps): BasinFloor {
+  const material = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader: basinFloorVertexShader,
+    fragmentShader: basinFloorFragmentShader,
+  });
+
+  const mesh = new THREE.Mesh(new THREE.CircleGeometry(1, circularPoolSegments), material);
+  mesh.name = "Basin floor";
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = basinFloorY;
+  mesh.receiveShadow = false;
+  scene.add(mesh);
+
+  return {
+    setRadius(radius: number) {
+      mesh.scale.set(radius, radius, 1);
+    },
+
+    dispose() {
+      scene.remove(mesh);
+      mesh.geometry.dispose();
+      material.dispose();
+    },
+  };
 }
