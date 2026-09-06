@@ -80,6 +80,8 @@ export function createFrameDiagnostics(renderer: THREE.WebGLRenderer): FrameDiag
   }
 
   const gpuTimer = createGpuFrameTimer(renderer);
+  const previousAutoReset = renderer.info.autoReset;
+  renderer.info.autoReset = false;
   const timings = createEmptyFrameStepTimings();
   let lastAnimationFrameAt = performance.now();
   let lastLoggedAt = 0;
@@ -147,6 +149,7 @@ export function createFrameDiagnostics(renderer: THREE.WebGLRenderer): FrameDiag
 
   return {
     beginFrame(now) {
+      renderer.info.reset();
       rafDelta = now - lastAnimationFrameAt;
       lastAnimationFrameAt = now;
       frameWorkStartedAt = performance.now();
@@ -172,6 +175,7 @@ export function createFrameDiagnostics(renderer: THREE.WebGLRenderer): FrameDiag
       lastAnimationFrameAt = performance.now();
     },
     dispose() {
+      renderer.info.autoReset = previousAutoReset;
       gpuTimer.dispose();
     },
   };
