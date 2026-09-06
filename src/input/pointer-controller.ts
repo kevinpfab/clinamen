@@ -240,7 +240,9 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
       return;
     }
 
-    const bowl = deps.bowlSystem.findAtPoint(point);
+    // The elevated shell can project far outside its water footprint in a
+    // shallow view. Prefer its rendered triangles, then allow a soft touch hit.
+    const bowl = deps.bowlSystem.pick(pointerRaycaster) ?? deps.bowlSystem.findAtPoint(point);
     if (!bowl) {
       startCameraOrbitDrag(event);
       return;

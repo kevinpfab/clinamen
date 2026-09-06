@@ -15,6 +15,7 @@ export type BowlInstanceRenderer = {
   // Added to (and removed from) the scene by the bowl system.
   objects: THREE.Object3D[];
   update: (bowls: BowlBody[]) => void;
+  pick: (raycaster: THREE.Raycaster) => number | null;
   dispose: () => void;
 };
 
@@ -77,6 +78,15 @@ export function createBowlInstanceRenderer(
 
   return {
     objects: [reflections, shells, rims],
+
+    pick(raycaster: THREE.Raycaster) {
+      // Instance bounds are not refreshed by setMatrixAt. Refresh only when
+      // picking, so drift cannot leave a stale broadphase sphere behind.
+      shells.computeBoundingSphere();
+      shells.updateWorldMatrix(true, false);
+      const hit = raycaster.intersectObject(shells, false)[0];
+      return hit?.instanceId ?? null;
+    },
 
     update(bowls: BowlBody[]) {
       shells.count = bowls.length;

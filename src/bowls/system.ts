@@ -42,6 +42,7 @@ export type BowlSystem = {
   updateResonance: (delta: number) => void;
   updateInstances: () => void;
   findAtPoint: (point: THREE.Vector2) => BowlBody | null;
+  pick: (raycaster: THREE.Raycaster) => BowlBody | null;
   clampPointToBounds: (bowl: BowlBody, point: THREE.Vector2) => THREE.Vector2;
   keepAllInsideBounds: () => void;
   keepInsideBounds: (bowl: BowlBody, restitution?: number) => void;
@@ -411,6 +412,12 @@ export function createBowlSystem({ bus, scene, materials, currentEnabled = true 
         }
       }
       instances?.update(bowls);
+    },
+
+    pick(raycaster: THREE.Raycaster) {
+      const index = instances?.pick(raycaster);
+      if (index === null || index === undefined) return null;
+      return bowls.find((bowl) => bowl.instanceIndex === index && bowl.emergence >= 1) ?? null;
     },
 
     findAtPoint(point: THREE.Vector2) {
