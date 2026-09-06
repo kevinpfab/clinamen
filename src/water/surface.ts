@@ -49,7 +49,9 @@ const waterFragmentShader = `
         smoothstep(0.0, 0.8, ray.y));
       float softbox = pow(max(dot(ray, normalize(vec3(-0.18, 0.60, -0.78))), 0.0), 90.0);
       float fill = pow(max(dot(ray, normalize(vec3(0.82, 0.48, 0.30))), 0.0), 10.0);
-      return room + vec3(1.0, 0.96, 0.87) * softbox * 5.0
+      float ceiling = pow(max(dot(ray, normalize(vec3(0.0, 1.0, 0.03))), 0.0), 80.0);
+      return room + vec3(0.91, 0.95, 1.0) * ceiling * 3.0
+        + vec3(1.0, 0.96, 0.87) * softbox * 5.0
         + vec3(0.66, 0.78, 0.86) * fill * 0.55;
     }
 

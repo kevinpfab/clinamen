@@ -15,7 +15,7 @@ export function createRippleField({ simulation }: RippleFieldDeps): RippleField 
     const amplitude = THREE.MathUtils.clamp(strength, 0, 0.88);
     // One volume-balanced kernel at the contact, rather than several offset
     // sources and a separate, independently traveling analytic ring.
-    simulation.queueImpulse(x, z, 0.22 + amplitude * 0.64, amplitude * 0.45);
+    simulation.queueImpulse(x, z, 0.18 + amplitude * 0.32, amplitude * 0.45);
   }
 
   return { addCollisionRipple };

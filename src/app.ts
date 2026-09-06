@@ -247,7 +247,6 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     frameDiagnostics.recordStep("bowls");
     bowlSystem.resolveCollisions(elapsed, heldBowl);
     frameDiagnostics.recordStep("collisions");
-    frameDiagnostics.recordStep("ripples");
     bowlSystem.updateResonance(delta);
     frameDiagnostics.recordStep("resonance");
     intro?.update(delta);

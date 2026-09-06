@@ -16,7 +16,6 @@ export const frameDiagnosticsEnabled = import.meta.env.DEV;
 export const FRAME_STEPS = [
   "bowls",
   "collisions",
-  "ripples",
   "resonance",
   "instances",
   "bowlField",

@@ -53,7 +53,8 @@ const bowlFieldVertexShader = `
 
     // Contact pressure is compact. The simulation carries the detached wake,
     // so a moving bowl does not need a long, overlapping trail-shaped splat.
-    float extent = radius + 0.24;
+    float pressureWidth = 0.065 + radius * 0.06;
+    float extent = (radius + 2.0 * pressureWidth) / 0.88;
     vec2 world = center + (direction * position.y + tangent * position.x) * extent;
 
     vWorld = world;
