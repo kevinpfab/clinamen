@@ -1,7 +1,6 @@
 import * as THREE from "three";
-import { bowlImpactRimInnerRadius, bowlLatheSegments, bowlWallStraightness } from "../config";
-import type { BowlShellProfile } from "./types";
-import { getBowlHeight } from "./tuning";
+import { bowlImpactRimInnerRadius, bowlLatheSegments } from "../config";
+import { createBowlShellProfile, getBowlHeight, getBowlRimRoundness } from "./profile";
 
 // Shared bowl profiles. The render path instances these unit-radius geometries
 // and applies per-bowl transforms instead of allocating geometry per bowl.
@@ -10,59 +9,6 @@ import { getBowlHeight } from "./tuning";
 // rim, as a fraction of bowl height (the lip's outer base sits at ~1.0). Just
 // below 1.0 wraps the rim's outer edge without running down the main bowl.
 const heroRimOuterDrape = 0.96;
-
-export function getBowlRimRoundness(radius: number) {
-  return Math.max(0.018, radius * 0.030);
-}
-
-export function getBowlRimY(radius: number) {
-  return getBowlHeight(radius) + getBowlRimRoundness(radius);
-}
-
-export function createBowlShellProfile(radius: number): BowlShellProfile {
-  const height = getBowlHeight(radius);
-  const rimRoundness = getBowlRimRoundness(radius);
-  const wallRadius = (current: number, straighter: number) =>
-    THREE.MathUtils.lerp(current, straighter, bowlWallStraightness);
-
-  // The rim lip is a shallow arc bridging the outer and inner walls so the
-  // profile never pinches into a knife edge at the top.
-  const rimOuterX = radius * 0.985;
-  const rimInnerX = radius * 0.940;
-  const rimCenterX = (rimOuterX + rimInnerX) / 2;
-  const rimHalfWidth = (rimOuterX - rimInnerX) / 2;
-  const rimLip = (t: number) => {
-    const angle = t * Math.PI;
-    return new THREE.Vector2(
-      rimCenterX + Math.cos(angle) * rimHalfWidth,
-      height + Math.sin(angle) * rimRoundness,
-    );
-  };
-
-  const outer = [
-    new THREE.Vector2(0, height * 0.050),
-    new THREE.Vector2(radius * 0.54, height * 0.035),
-    new THREE.Vector2(radius * wallRadius(0.76, 0.88), height * 0.080),
-    new THREE.Vector2(radius * 0.998, height * 0.880),
-    rimLip(0),
-    rimLip(0.25),
-    rimLip(0.5),
-  ];
-  const inner = [
-    rimLip(0.75),
-    rimLip(1),
-    new THREE.Vector2(radius * wallRadius(0.690, 0.800), height * 0.420),
-    new THREE.Vector2(radius * 0.220, height * 0.082),
-    new THREE.Vector2(0, height * 0.075),
-  ];
-
-  return {
-    full: [...outer, ...inner],
-    outer,
-    inner,
-    rimY: height + rimRoundness,
-  };
-}
 
 // Height of the bowl's inner/outer wall at a given radius, walking a descending
 // profile polyline. Used to seat the hero rim band on the real wall surface.

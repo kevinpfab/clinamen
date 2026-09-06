@@ -8,9 +8,10 @@ import {
 import { getWaterSurfaceRadius } from "../core/world";
 import { pseudoRandom } from "../core/math";
 import type { LightingSystem } from "../core/lighting";
-import { createHeroBowlRimGeometry, getBowlRimY } from "../bowls/geometry";
+import { getBowlPlaneY, getBowlRimY } from "../bowls/profile";
+import { createHeroBowlRimGeometry } from "../bowls/geometry";
 import type { BowlMaterials } from "../bowls/materials";
-import { heroBowlRimSegments } from "../config";
+import { heroBowlRimSegments, waterPlaneY } from "../config";
 import type { SharedWaterUniforms } from "../water/uniforms";
 import { triggerBowlResonance } from "../bowls/resonance";
 import type { BowlBody } from "../bowls/types";
@@ -468,7 +469,8 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence | nu
       }
 
       entry.bowl.emergence = smootherstep(riseProgress);
-      if (!entry.rippled && entry.bowl.emergence > 0.92) {
+      entry.bowl.mesh.position.y = getBowlPlaneY(entry.bowl.radius, entry.bowl.emergence);
+      if (!entry.rippled && getBowlPlaneY(entry.bowl.radius, entry.bowl.emergence) + getBowlRimY(entry.bowl.radius) > waterPlaneY) {
         entry.rippled = true;
         const outward = new THREE.Vector2(entry.bowl.mesh.position.x, entry.bowl.mesh.position.z);
         deps.bus.emit("ripple", {

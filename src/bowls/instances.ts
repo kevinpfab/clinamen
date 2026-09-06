@@ -5,8 +5,8 @@ import {
   createInstancedBowlReflectionGeometry,
   createInstancedBowlRimGeometry,
   createInstancedBowlShellGeometry,
-  getBowlRimY,
 } from "./geometry";
+import { getBowlRimY } from "./profile";
 import type { BowlMaterials } from "./materials";
 
 // The whole bowl field drawn as three instanced meshes: porcelain shells, their

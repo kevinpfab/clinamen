@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import {
-  bowlEmergenceDepth,
   bowlImpactCooldown,
   velocityWorldScale,
 } from "../config";
@@ -22,6 +21,7 @@ import {
 import { resolveCircularBoundaryContact } from "../physics/bounds";
 import { separateBodies, type SeparationBody } from "../physics/separation";
 import { sampleBasinCurrent, type BasinCurrentSample } from "../physics/flow";
+import { getBowlPlaneY } from "./profile";
 import type { BowlBody } from "./types";
 import { createBowlInstanceRenderer, type BowlInstanceRenderer } from "./instances";
 import { goldenAngle, scatterBowlPosition } from "./layout";
@@ -29,7 +29,6 @@ import { bowlResonancePulseLifetime, type BowlMaterials } from "./materials";
 import { triggerBowlResonance, updateBowlResonance } from "./resonance";
 import {
   getBowlCenterLimit,
-  getBowlPlaneY,
   getBowlRadius,
   getToneRatio,
 } from "./tuning";
@@ -215,6 +214,7 @@ export function createBowlSystem({ bus, scene, materials }: BowlSystemDeps): Bow
         contactRadius: getBowlContactRadius(radius),
         toneRatio,
         velocity: new THREE.Vector2(Math.cos(direction), Math.sin(direction)).multiplyScalar(speed),
+        waterVelocity: new THREE.Vector2(),
         emergence: 1,
         momentumStrength: 0,
         angularVelocity: (i % 2 === 0 ? 1 : -1) * (0.035 + (i % 5) * 0.006),
@@ -311,8 +311,7 @@ export function createBowlSystem({ bus, scene, materials }: BowlSystemDeps): Bow
       const poolRadius = getWaterSurfaceRadius();
 
       for (const bowl of bowls) {
-        bowl.mesh.position.y = getBowlPlaneY(bowl.radius)
-          - bowlEmergenceDepth * (1 - bowl.emergence);
+        bowl.mesh.position.y = getBowlPlaneY(bowl.radius, bowl.emergence);
         bowl.visual.rotation.x = 0;
         bowl.visual.rotation.z = 0;
 
@@ -401,6 +400,13 @@ export function createBowlSystem({ bus, scene, materials }: BowlSystemDeps): Bow
     },
 
     updateInstances() {
+      for (const bowl of bowls) {
+        if (frozen || bowl.emergence < 1) {
+          bowl.waterVelocity.set(0, 0);
+        } else {
+          bowl.waterVelocity.copy(bowl.velocity);
+        }
+      }
       instances?.update(bowls);
     },
 

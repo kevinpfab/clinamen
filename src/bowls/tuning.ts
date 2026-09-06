@@ -1,23 +1,10 @@
 import * as THREE from "three";
-import {
-  bowlHeightScale,
-  bowlShellBottomHeightScale,
-  waterPlaneY,
-} from "../config";
 import type { BowlSizeRange } from "../settings";
 
-// Pure mappings from a bowl index/radius to its physical height, resting plane,
-// drift bounds, and microtonal tone ratio. Everything varying is a parameter:
+// Pure mappings from a bowl index/radius to its radius, drift bounds,
+// and microtonal tone ratio. Everything varying is a parameter:
 // these used to read simulationSettings and getWaterSurfaceRadius() directly,
 // which made them depend on global mutable state and impossible to test.
-
-export function getBowlHeight(radius: number) {
-  return radius * bowlHeightScale;
-}
-
-export function getBowlPlaneY(radius: number) {
-  return waterPlaneY - getBowlHeight(radius) * bowlShellBottomHeightScale;
-}
 
 // Bowl radii are spread over the size range by a golden-ratio sequence, so any
 // prefix of the bowls covers the range evenly rather than in index order.

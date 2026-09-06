@@ -19,8 +19,10 @@ export type BowlBody = {
   contactRadius: number;
   toneRatio: number;
   velocity: THREE.Vector2;
+  // Motion presented to the water; zero while translation is frozen.
+  waterVelocity: THREE.Vector2;
   // 0 = waiting below the surface, 1 = floating. The intro raises this;
-  // drift, collisions, and surface effects only engage at 1.
+  // drift and collisions engage at 1; contact follows the actual hull.
   emergence: number;
   momentumStrength: number;
   angularVelocity: number;

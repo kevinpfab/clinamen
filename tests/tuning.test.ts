@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   getBowlCenterLimit,
-  getBowlHeight,
-  getBowlPlaneY,
   getBowlRadius,
   getToneRatio,
 } from "../src/bowls/tuning";
+import { getBowlHeight, getBowlPlaneY } from "../src/bowls/profile";
 import { bowlHeightScale, waterPlaneY } from "../src/config";
 
 const sizeRange = { minRadius: 0.25, maxRadius: 0.5 };

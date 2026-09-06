@@ -24,7 +24,8 @@ export const bowlLatheSegments = 36;
 // the traveling wave reads as a smooth circle tracing the rounded lip rather
 // than the faceted 36-gon the instanced field rims share.
 export const heroBowlRimSegments = 200;
-export const bowlShellBottomHeightScale = 0.010;
+// Resting waterline through the lower outer wall, as a fraction of bowl height.
+export const bowlDraftHeightRatio = 0.12;
 export const bowlImpactColorIntensity = isMobilePerformanceTarget ? 1.85 : 1.0;
 export const bowlImpactRimInnerRadius = isMobilePerformanceTarget ? 0.52 : 0.86;
 export const bowlImpactInwardReachScale = isMobilePerformanceTarget ? 4.25 : 1.0;
