@@ -6,6 +6,7 @@ import {
   maxFlowJets,
   maxRipples,
   waterSimulationSize,
+  waterPlaneY,
 } from "../config";
 import type { SharedWaterUniforms } from "../water/uniforms";
 import { porcelainSurface } from "./porcelain";
@@ -368,6 +369,11 @@ const reflectionFragmentShader = `
     }
 
     void main() {
+      // Only the real bowl above the water has a mirror image below it.
+      // Clip in world space instead of shrinking submerged reflections.
+      if (vWorldPosition.y >= ${waterPlaneY.toFixed(3)}) {
+        discard;
+      }
       vec3 poolBlue = vec3(0.000, 0.561, 0.776);
       vec3 bowlIvory = vec3(0.900, 0.880, 0.800);
       float body = clamp(vReflectionFade, 0.0, 1.0);
@@ -379,7 +385,8 @@ const reflectionFragmentShader = `
       color += mix(poolBlue, bowlIvory, 0.32) * band * 0.20;
       color = mix(color, poolBlue * 0.76, refractionBreakup * 0.16);
       float poolVisibility = reflectionPoolVisibility(vWorldPosition.xz);
-      float alpha = uOpacity * (0.46 + body * 0.64) * (1.0 - vWaterMotion * 0.18 - refractionBreakup * 0.12) * poolVisibility;
+      float waterlineFade = smoothstep(0.0, 0.012, ${waterPlaneY.toFixed(3)} - vWorldPosition.y);
+      float alpha = uOpacity * waterlineFade * (0.46 + body * 0.64) * (1.0 - vWaterMotion * 0.18 - refractionBreakup * 0.12) * poolVisibility;
       if (alpha <= 0.001) {
         discard;
       }

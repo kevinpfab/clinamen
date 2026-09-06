@@ -5,10 +5,10 @@ import { createBowlShellProfile, getBowlHeight, getBowlRimRoundness } from "./pr
 // Shared bowl profiles. The render path instances these unit-radius geometries
 // and applies per-bowl transforms instead of allocating geometry per bowl.
 
-// How far the hero's intro flare band curls over the outside of the rounded
+// How far the flare band curls over the outside of the rounded
 // rim, as a fraction of bowl height (the lip's outer base sits at ~1.0). Just
 // below 1.0 wraps the rim's outer edge without running down the main bowl.
-const heroRimOuterDrape = 0.96;
+const rimOuterDrape = 0.96;
 
 // Height of the bowl's inner/outer wall at a given radius, walking a descending
 // profile polyline. Used to seat the hero rim band on the real wall surface.
@@ -46,13 +46,12 @@ function offsetAlongNormals(points: THREE.Vector2[], margin: number) {
   });
 }
 
-// A high-resolution lathe band that traces the bowl's actual rounded rim: up
+// A lathe band that traces the bowl's actual rounded rim: up
 // the inner wall from the impulse inner radius, over the crowned lip, and down
-// to the pool-facing edge. Unlike the shared flat RingGeometry, this drapes the
-// hero's intro flare onto the true rim contour. Built at unit radius so the
+// to the pool-facing edge. Built at unit radius so the
 // resonance shader's radius math (which reads raw position.xz) stays in the
-// same 0..1 space as the instanced rim.
-export function createHeroBowlRimGeometry(segments: number) {
+// same 0..1 space for field bowls and the hero.
+export function createBowlRimGeometry(segments = bowlLatheSegments) {
   const profile = createBowlShellProfile(1);
   const { inner, outer } = profile;
 
@@ -73,29 +72,23 @@ export function createHeroBowlRimGeometry(segments: number) {
   // Curl the outer edge just over the outside of the rounded lip, down toward
   // the top of the outer wall but no further, so the flare drapes the rim and
   // not the main bowl body.
-  const outerCurlY = getBowlHeight(1) * heroRimOuterDrape;
+  const outerCurlY = getBowlHeight(1) * rimOuterDrape;
   const curlT = (outerCurlY - lipOuter.y) / (outerWall.y - lipOuter.y);
   const outerCurlX = THREE.MathUtils.lerp(lipOuter.x, outerWall.x, curlT);
 
-  // Stored peak-relative so placement can anchor the crown at getBowlRimY,
-  // matching the instanced rim's plane.
-  const peakY = profile.rimY;
-  const at = (point: THREE.Vector2) =>
-    new THREE.Vector2(point.x, point.y - peakY);
-
   const surface = [
-    at(new THREE.Vector2(bowlImpactRimInnerRadius, innerEdgeY)),
-    at(lipInner),
-    at(lipInnerMid),
-    at(lipPeak),
-    at(lipOuterMid),
-    at(lipOuter),
-    at(new THREE.Vector2(outerCurlX, outerCurlY)),
+    new THREE.Vector2(bowlImpactRimInnerRadius, innerEdgeY),
+    lipInner,
+    lipInnerMid,
+    lipPeak,
+    lipOuterMid,
+    lipOuter,
+    new THREE.Vector2(outerCurlX, outerCurlY),
   ];
 
   // Float the band clear of the porcelain along the surface normal so the
   // additive flare never z-fights the shell it hugs.
-  const band = offsetAlongNormals(surface, getBowlRimRoundness(1) * 0.9);
+  const band = offsetAlongNormals(surface, getBowlRimRoundness(1) * 0.08);
   return new THREE.LatheGeometry(band, segments);
 }
 
@@ -109,8 +102,3 @@ export function createInstancedBowlReflectionGeometry() {
   return geometry;
 }
 
-export function createInstancedBowlRimGeometry() {
-  const geometry = new THREE.RingGeometry(bowlImpactRimInnerRadius, 1.0, bowlLatheSegments, 1);
-  geometry.rotateX(-Math.PI / 2);
-  return geometry;
-}

@@ -8,8 +8,9 @@ import {
 import { getWaterSurfaceRadius } from "../core/world";
 import { pseudoRandom } from "../core/math";
 import type { LightingSystem } from "../core/lighting";
+import { composeBowlMatrix } from "../bowls/pose";
 import { getBowlPlaneY, getBowlRimY } from "../bowls/profile";
-import { createHeroBowlRimGeometry } from "../bowls/geometry";
+import { createBowlRimGeometry } from "../bowls/geometry";
 import type { BowlMaterials } from "../bowls/materials";
 import { heroBowlRimSegments, waterPlaneY } from "../config";
 import type { SharedWaterUniforms } from "../water/uniforms";
@@ -223,9 +224,10 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence | nu
   // faceted flat disc the instanced field rims share. It is driven by uniforms
   // and torn down at hand-off, when the hero rejoins the instanced field.
   const heroRim = new THREE.Mesh(
-    createHeroBowlRimGeometry(heroBowlRimSegments),
+    createBowlRimGeometry(heroBowlRimSegments),
     deps.materials.createHeroResonance(),
   );
+  heroRim.matrixAutoUpdate = false;
   heroRim.frustumCulled = false;
   heroRim.renderOrder = 7;
   scene.add(heroRim);
@@ -236,13 +238,8 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence | nu
     if (!heroRimActive) {
       return;
     }
-    heroRim.position.set(
-      hero.mesh.position.x,
-      hero.mesh.position.y + getBowlRimY(hero.radius),
-      hero.mesh.position.z,
-    );
-    heroRim.rotation.set(hero.visual.rotation.x, hero.mesh.rotation.y, hero.visual.rotation.z);
-    heroRim.scale.setScalar(hero.radius);
+    composeBowlMatrix(hero, heroRim.matrix);
+    heroRim.matrixWorldNeedsUpdate = true;
     const resonance = hero.resonance;
     const uniforms = (heroRim.material as THREE.ShaderMaterial).uniforms;
     uniforms.uRimPulse.value.set(
@@ -504,16 +501,16 @@ export function createIntroSequence(deps: IntroSequenceDeps): IntroSequence | nu
         }
       }
 
-      syncHeroRim();
-
       if (struckAt === null) {
         // Title: hold the close-up with a barely-there breath of motion.
         titleAzimuth = Math.sin(time * 0.16) * titleAzimuthDrift;
         hero.mesh.position.y += Math.sin(time * 0.85) * 0.006;
+        syncHeroRim();
         setIntroCamera(titleAzimuth, titlePitch, titleDistance, heroX, titleTargetY, heroZ);
         return;
       }
 
+      syncHeroRim();
       const sinceStrike = time - struckAt;
 
       if (!summonsEmitted && sinceStrike > 0.55) {
