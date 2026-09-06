@@ -29,6 +29,17 @@ beforeEach(() => {
 });
 
 describe("ripple pool", () => {
+  test("clearing retires active rings and immediately updates consumers", () => {
+    ripples.addCollisionRipple(1, 2, 0.4);
+    ripples.update(0.1);
+    expect(uniforms.uRippleCount.value).toBe(1);
+    ripples.clear();
+    expect(uniforms.uRippleCount.value).toBe(0);
+    expect(uniforms.uRippleData.value[0].z).toBe(0);
+    ripples.update(0.1);
+    expect(uniforms.uRippleCount.value).toBe(0);
+  });
+
   test("publishes an empty pool as zeroed uniform slots", () => {
     expect(uniforms.uRippleCount.value).toBe(0);
     for (let i = 0; i < maxRipples; i += 1) {

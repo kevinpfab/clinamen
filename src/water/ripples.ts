@@ -30,6 +30,7 @@ export type RippleField = {
   ) => void;
   emitDragReleaseRipple: (state: DragState, time: number) => void;
   update: (delta: number) => void;
+  clear: () => void;
 };
 
 type RippleFieldDeps = {
@@ -304,5 +305,9 @@ export function createRippleField({ uniforms, simulation }: RippleFieldDeps): Ri
     updateDragWaterInteraction,
     emitDragReleaseRipple,
     update: updateRipples,
+    clear() {
+      ripples.length = 0;
+      updateRipples(0);
+    },
   };
 }

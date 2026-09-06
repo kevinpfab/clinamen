@@ -6,6 +6,7 @@ import {
 } from "./config";
 import { debugSettings, simulationSettings, world } from "./settings";
 import type { Stage } from "./core/stage";
+import { createSimulationClock } from "./core/simulation-clock";
 import { getWaterSurfaceRadius } from "./core/world";
 import {
   createCameraControls,
@@ -106,12 +107,13 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
   let audioStartPromise: Promise<void> | null = null;
   let animationFrame = 0;
   let resizeFrame = 0;
-  let waterSimulationAccumulator = 0;
+  const simulationClock = createSimulationClock(waterSimulationFixedStep, maxWaterSimulationSubsteps);
   let disposed = false;
 
   function clearWaterState() {
-    waterSimulationAccumulator = 0;
+    simulationClock.resetAccumulator();
     simulation.clear();
+    ripples.clear();
   }
 
   function updateWorldSize() {
@@ -122,6 +124,12 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
 
     const cameraDefaults = getResponsiveCameraDefaults(aspect);
     const waterSurfaceRadius = getWaterSurfaceRadius();
+    if (waterUniforms.uPoolData.value.z !== waterSurfaceRadius) {
+      // Texture coordinates change meaning when the physical pool changes size.
+      // Reset both wave representations together instead of stretching old rings.
+      pointerController?.cancelInteractions();
+      clearWaterState();
+    }
     camera.aspect = aspect;
     camera.fov = cameraDefaults.fov;
     cameraOrbit.minDistance = Math.max(waterSurfaceRadius * 0.88, 6.8);
@@ -226,29 +234,11 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     rebuildBowls();
   }
 
-  function updateWaterSimulationForFrame(delta: number) {
-    waterSimulationAccumulator = Math.min(
-      waterSimulationAccumulator + delta,
-      waterSimulationFixedStep * maxWaterSimulationSubsteps,
-    );
-
-    let substeps = 0;
-    while (
-      waterSimulationAccumulator >= waterSimulationFixedStep &&
-      substeps < maxWaterSimulationSubsteps
-    ) {
-      simulation.update(waterSimulationFixedStep);
-      waterSimulationAccumulator -= waterSimulationFixedStep;
-      substeps += 1;
-    }
-  }
-
   function animate(now: DOMHighResTimeStamp) {
     animationFrame = window.requestAnimationFrame(animate);
     frameDiagnostics.beginFrame(now);
 
-    const delta = Math.min(clock.getDelta(), 0.04);
-    const elapsed = clock.elapsedTime;
+    const { delta, elapsed, steps } = simulationClock.advance(clock.getDelta());
     waterUniforms.uTime.value = elapsed;
 
     const heldBowl = pointerController?.getDraggedBowl() ?? null;
@@ -270,7 +260,9 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     frameDiagnostics.recordStep("interactionField");
     flowJets.emitImpulses(elapsed);
     frameDiagnostics.recordStep("flowImpulses");
-    updateWaterSimulationForFrame(delta);
+    for (let step = 0; step < steps; step += 1) {
+      simulation.update(waterSimulationFixedStep);
+    }
     frameDiagnostics.recordStep("waterSim");
     waveState.update();
     frameDiagnostics.recordStep("waveState");
