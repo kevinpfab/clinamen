@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { waterPlaneY } from "../src/config";
 import { composeBowlMatrix, composeBowlReflectionMatrix } from "../src/bowls/pose";
 import { createBowlRimGeometry, createInstancedBowlShellGeometry } from "../src/bowls/geometry";
+import { createBowlShellProfile } from "../src/bowls/profile";
 
 describe("shared bowl pose", () => {
   test("reflection mirrors the final tilted, translated pose without shrinking", () => {
@@ -33,6 +34,19 @@ describe("shared bowl pose", () => {
     expect(crownOffset).toBeLessThan(0.003);
     expect(rim.boundingBox!.min.y).toBeLessThan(shell.boundingBox!.max.y);
     shell.dispose();
+    rim.dispose();
+  });
+
+  test("a wide mobile flare follows the inner-wall knee", () => {
+    const rim = createBowlRimGeometry(36, 0.52);
+    const knee = createBowlShellProfile(1).inner[2];
+    const positions = rim.getAttribute("position");
+    let distance = Infinity;
+    for (let i = 0; i < positions.count; i += 1) {
+      const r = Math.hypot(positions.getX(i), positions.getZ(i));
+      distance = Math.min(distance, Math.hypot(r - knee.x, positions.getY(i) - knee.y));
+    }
+    expect(distance).toBeLessThan(0.003);
     rim.dispose();
   });
 });

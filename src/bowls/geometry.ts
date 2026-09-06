@@ -51,7 +51,7 @@ function offsetAlongNormals(points: THREE.Vector2[], margin: number) {
 // to the pool-facing edge. Built at unit radius so the
 // resonance shader's radius math (which reads raw position.xz) stays in the
 // same 0..1 space for field bowls and the hero.
-export function createBowlRimGeometry(segments = bowlLatheSegments) {
+export function createBowlRimGeometry(segments = bowlLatheSegments, innerRadius = bowlImpactRimInnerRadius) {
   const profile = createBowlShellProfile(1);
   const { inner, outer } = profile;
 
@@ -67,7 +67,7 @@ export function createBowlRimGeometry(segments = bowlLatheSegments) {
 
   // Seat the inner edge on the real inner wall at the impulse inner radius.
   const innerWall = inner.slice(1);
-  const innerEdgeY = sampleWallHeight(innerWall, bowlImpactRimInnerRadius);
+  const innerEdgeY = sampleWallHeight(innerWall, innerRadius);
 
   // Curl the outer edge just over the outside of the rounded lip, down toward
   // the top of the outer wall but no further, so the flare drapes the rim and
@@ -76,8 +76,18 @@ export function createBowlRimGeometry(segments = bowlLatheSegments) {
   const curlT = (outerCurlY - lipOuter.y) / (outerWall.y - lipOuter.y);
   const outerCurlX = THREE.MathUtils.lerp(lipOuter.x, outerWall.x, curlT);
 
+  const innerContour: THREE.Vector2[] = [];
+  for (let i = innerWall.length - 1; i >= 0; i -= 1) {
+    const point = innerWall[i];
+    if (point.x > innerRadius && point.x < lipInner.x) {
+      innerContour.push(point);
+    }
+  }
   const surface = [
-    new THREE.Vector2(bowlImpactRimInnerRadius, innerEdgeY),
+    new THREE.Vector2(innerRadius, innerEdgeY),
+    // The wider mobile flare crosses the inner wall's knee. Preserve those
+    // profile vertices instead of bridging the cavity with a straight band.
+    ...innerContour,
     lipInner,
     lipInnerMid,
     lipPeak,
@@ -88,7 +98,13 @@ export function createBowlRimGeometry(segments = bowlLatheSegments) {
 
   // Float the band clear of the porcelain along the surface normal so the
   // additive flare never z-fights the shell it hugs.
-  const band = offsetAlongNormals(surface, getBowlRimRoundness(1) * 0.08);
+  // A finer intro band must also clear the polygonal inner shell between its
+  // vertices. Bound that radial mismatch by the unit circle's facet sagitta.
+  const facetClearance = segments > bowlLatheSegments
+    ? (1 - Math.cos(Math.PI / bowlLatheSegments)) * 1.2
+    : 0;
+  const margin = Math.max(getBowlRimRoundness(1) * 0.08, facetClearance);
+  const band = offsetAlongNormals(surface, margin);
   return new THREE.LatheGeometry(band, segments);
 }
 
