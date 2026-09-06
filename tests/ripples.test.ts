@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import * as THREE from "three";
 import { createRippleField } from "../src/water/ripples";
 import type { WaterSimulation } from "../src/water/simulation";
-import type { DragState } from "../src/input/types";
-import { createDragVelocity } from "../src/input/drag-velocity";
 import { getCollisionRippleStrength } from "../src/physics/collision";
 
 function createFixture() {
@@ -17,19 +14,6 @@ function createFixture() {
     dispose: () => {},
   };
   return { impulses, ripples: createRippleField({ simulation }) };
-}
-
-function createDragState(speed: number): DragState {
-  return {
-    bowl: {
-      id: 0, instanceIndex: 0, mesh: new THREE.Object3D(), visual: new THREE.Object3D(),
-      resonance: { age: 0, lifetime: 1, strength: 0, toneRatio: 0.5, impactDirection: new THREE.Vector2(1, 0), envelope: 0 },
-      radius: 0.5, contactRadius: 0.5, toneRatio: 0.5, velocity: new THREE.Vector2(speed, 0),
-      waterVelocity: new THREE.Vector2(speed, 0), emergence: 1, momentumStrength: 0, angularVelocity: 0, lastImpactAt: -10, phase: 0,
-    },
-    pointerId: 1, offset: new THREE.Vector2(), lastRippleAt: 0, lastRipplePoint: new THREE.Vector2(),
-    velocity: createDragVelocity(new THREE.Vector2(), 0),
-  };
 }
 
 describe("height-field ripple sources", () => {
@@ -65,31 +49,5 @@ describe("height-field ripple sources", () => {
     expect(impulses).toHaveLength(1);
     expect(impulses[0].strength).toBeLessThanOrEqual(0.42);
     expect(impulses[0].radius).toBeLessThan(1);
-  });
-
-  test("drag sources stay behind the hull and stop when the held bowl stops", () => {
-    const { ripples, impulses } = createFixture();
-    const state = createDragState(0.5);
-    ripples.updateDragWaterInteraction(state, new THREE.Vector2(), new THREE.Vector2(0.4, 0), 0.2);
-    expect(impulses.length).toBeGreaterThan(0);
-    expect(impulses.length).toBeLessThanOrEqual(2);
-    for (const impulse of impulses) {
-      expect(impulse.x).toBeLessThan(0.4);
-      expect(impulse.strength).toBeLessThan(0);
-    }
-    const count = impulses.length;
-    state.bowl.velocity.set(0, 0);
-    ripples.updateDragWaterInteraction(state, new THREE.Vector2(0.4, 0), new THREE.Vector2(0.4, 0), 1);
-    ripples.emitDragReleaseRipple(state);
-    expect(impulses).toHaveLength(count);
-  });
-
-  test("rapid pointer updates cannot emit an unlimited number of pressure sources", () => {
-    const { ripples, impulses } = createFixture();
-    const state = createDragState(0.5);
-    ripples.updateDragWaterInteraction(state, new THREE.Vector2(), new THREE.Vector2(0.4, 0), 0.2);
-    const count = impulses.length;
-    ripples.updateDragWaterInteraction(state, new THREE.Vector2(0.4, 0), new THREE.Vector2(0.401, 0), 0.201);
-    expect(impulses).toHaveLength(count);
   });
 });

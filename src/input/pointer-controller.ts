@@ -9,7 +9,6 @@ import type { CameraControls } from "../core/camera-controls";
 import type { BowlSystem } from "../bowls/system";
 import type { BowlBody } from "../bowls/types";
 import type { CameraOrbitDragState, DragState } from "./types";
-import type { RippleField } from "../water/ripples";
 import {
   createDragVelocity,
   pushDragVelocitySample,
@@ -20,7 +19,6 @@ type PointerControllerDeps = {
   stage: Stage;
   cameraControls: CameraControls;
   bowlSystem: BowlSystem;
-  ripples: RippleField;
 };
 
 export type PointerController = {
@@ -74,13 +72,11 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
   }
 
   function moveDraggedBowl(state: DragState, point: THREE.Vector2, time: number) {
-    const previous = new THREE.Vector2(state.bowl.mesh.position.x, state.bowl.mesh.position.z);
     const target = deps.bowlSystem.clampPointToBounds(state.bowl, point.add(state.offset));
     state.bowl.mesh.position.x = target.x;
     state.bowl.mesh.position.z = target.y;
     pushDragVelocitySample(state.velocity, target, time);
     state.bowl.velocity.copy(state.velocity.heldVelocity);
-    deps.ripples.updateDragWaterInteraction(state, previous, target, time);
   }
 
   function startCameraOrbitDrag(event: PointerEvent) {
@@ -259,8 +255,6 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
       bowl,
       pointerId: event.pointerId,
       offset: bowlPoint.sub(point),
-      lastRippleAt: time,
-      lastRipplePoint: new THREE.Vector2(bowl.mesh.position.x, bowl.mesh.position.z),
       velocity,
     };
     bowl.velocity.set(0, 0);
@@ -309,7 +303,6 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
     pushDragVelocitySample(dragState.velocity, releaseTarget, releaseTime);
     releasedBowl.velocity.copy(dragState.velocity.releaseVelocity);
     deps.bowlSystem.addMomentum(releasedBowl, releasedBowl.velocity.length() * 4.2);
-    deps.ripples.emitDragReleaseRipple(dragState);
     releasedBowl.angularVelocity += THREE.MathUtils.clamp(
       releasedBowl.velocity.length() * 0.18,
       0,

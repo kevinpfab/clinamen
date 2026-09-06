@@ -10,8 +10,6 @@ import type { Stage } from "../core/stage";
 import type { CameraControls } from "../core/camera-controls";
 import { getPoolFitDistance } from "../core/camera-controls";
 import { getWaterSurfaceRadius } from "../core/world";
-import type { DragState } from "../input/types";
-import { createDragVelocity } from "../input/drag-velocity";
 
 export type WaterLab = {
   readonly elapsed: number;
@@ -49,7 +47,7 @@ export function createWaterLab(deps: WaterLabDeps): WaterLab {
   let playbackDebt = 0;
   let playing = false;
   let collisions = 0;
-  let drag: DragState | null = null;
+  let heldBowl: BowlBody | null = null;
   const previousPoint = new THREE.Vector2();
   const currentPoint = new THREE.Vector2();
   const panel = document.createElement("section");
@@ -122,12 +120,7 @@ export function createWaterLab(deps: WaterLabDeps): WaterLab {
       }
       bowl.waterVelocity.copy(bowl.velocity);
     }
-    drag = null;
-    if (scenario === "Drag and stop") {
-      const bowl = bowlSystem.bowls[0];
-      const point = new THREE.Vector2(bowl.mesh.position.x, bowl.mesh.position.z);
-      drag = { bowl, pointerId: -1, offset: new THREE.Vector2(), lastRippleAt: 0, lastRipplePoint: point.clone(), velocity: createDragVelocity(point, 0) };
-    }
+    heldBowl = scenario === "Drag and stop" ? bowlSystem.bowls[0] : null;
     deps.resetWater();
     bowlSystem.updateInstances();
     for (const [name, element] of scenarioButtons) element.setAttribute("aria-pressed", String(name === scenario));
@@ -179,14 +172,13 @@ export function createWaterLab(deps: WaterLabDeps): WaterLab {
       frame += 1;
       const elapsed = frame * waterSimulationStep;
       if (scenario === "Ripple" && frame === 15) ripples.addCollisionRipple(-1.1, 0, 0.38);
-      if (!drag) return null;
-      const bowl = drag.bowl;
+      if (!heldBowl) return null;
+      const bowl = heldBowl;
       previousPoint.set(bowl.mesh.position.x, bowl.mesh.position.z);
       currentPoint.set(-1 + Math.min(elapsed, 1) * 2, 0);
       bowl.mesh.position.x = currentPoint.x;
       bowl.mesh.position.z = currentPoint.y;
       bowl.velocity.copy(currentPoint).sub(previousPoint).divideScalar(waterSimulationStep * velocityWorldScale);
-      ripples.updateDragWaterInteraction(drag, previousPoint, currentPoint, elapsed);
       return bowl;
     },
     updateStatus,

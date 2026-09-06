@@ -63,6 +63,7 @@ const simulationFragmentShader = `
   precision highp float;
 
   uniform sampler2D uState;
+  uniform sampler2D uBowlFieldMap;
   uniform vec2 uTexel;
   uniform vec4 uSimWorld;
   uniform vec4 uPoolData;
@@ -114,6 +115,7 @@ const simulationFragmentShader = `
 
     float stepScale = clamp(uDelta * 60.0, 0.35, 1.65);
     velocity += laplacian * uWaveKick * stepScale;
+    velocity += texture2D(uBowlFieldMap, vUv).g * stepScale;
     velocity *= pow(0.982, stepScale);
     height += velocity * 0.34 * stepScale;
     height *= pow(0.998, stepScale);
@@ -197,6 +199,7 @@ export function createWaterSimulation({ renderer, uniforms }: WaterSimulationDep
   const pendingImpulses = new WaterImpulseQueue(maxWaterImpulses);
   const simulationUniforms: WaterSimulationUniforms & Record<string, THREE.IUniform> = {
     uState: { value: readTarget.texture },
+    uBowlFieldMap: uniforms.uBowlFieldMap,
     uTexel: { value: new THREE.Vector2(1 / waterSimulationSize, 1 / waterSimulationSize) },
     uSimWorld: uniforms.uSimWorld,
     uPoolData: uniforms.uPoolData,

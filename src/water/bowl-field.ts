@@ -5,9 +5,9 @@ import type { SharedWaterUniforms } from "./uniforms";
 import { sampleBowlWaterContact, type BowlWaterContact } from "../bowls/profile";
 import type { BowlBody } from "../bowls/types";
 
-// The bowl influence field (wake height, wake energy, meniscus, footprint).
-// Each bowl is splatted as one instanced trapezoid quad covering its rim,
-// bow wave, and wake trail, blended additively into the target. This keeps
+// The bowl contact field (meniscus height, signed pressure, meniscus, footprint).
+// Each bowl is splatted as one compact instanced quad, blended additively
+// into the target. Moving contact pressure drives the wave solver. This keeps
 // the cost proportional to the area bowls actually influence instead of
 // evaluating every bowl at every texel (100 bowls x 384^2 texels).
 export type BowlField = {
@@ -30,14 +30,6 @@ const bowlFieldOptions = {
   generateMipmaps: false,
 };
 
-// Shared by geometry bounds and wave decay, so shortening slow wakes never
-// clips a long-decay field at an unrelated raster boundary.
-const bowlWakeLengthChunk = `
-  float bowlWakeLength(float radius, float speedRatio) {
-    return mix(radius * 0.9 + 0.18, radius * 3.15 + 1.15, smoothstep(0.04, 0.55, speedRatio));
-  }
-`;
-
 const bowlFieldVertexShader = `
   attribute vec4 aBowlData;
   attribute vec3 aBowlVelocity;
@@ -50,7 +42,6 @@ const bowlFieldVertexShader = `
   varying vec2 vSplatUv;
   varying float vContactVisibility;
 
-  ${bowlWakeLengthChunk}
 
   void main() {
     vec2 center = aBowlData.xy;
@@ -60,19 +51,10 @@ const bowlFieldVertexShader = `
     // Preserve the source quad's counterclockwise winding in simulation UV.
     vec2 tangent = vec2(direction.y, -direction.x);
 
-    // Trapezoid extents sized to the influence terms in the fragment
-    // shader: rim + bow crest ahead, the exponential wake trail behind,
-    // and a lateral flare that follows the V-wake opening angle.
-    float aheadExtent = radius * 1.6 + 0.30;
-    // Still bowls only need a compact contact patch.
-    float behindExtent = max(aheadExtent, bowlWakeLength(radius, aBowlData.w) * 2.2);
-    float frontHalfWidth = radius * 1.7 + 0.42;
-    float backHalfWidth = frontHalfWidth + behindExtent * 0.75;
-
-    float t = position.y * 0.5 + 0.5;
-    float along = mix(-behindExtent, aheadExtent, t);
-    float halfWidth = mix(backHalfWidth, frontHalfWidth, t);
-    vec2 world = center + direction * along + tangent * (position.x * halfWidth);
+    // Contact pressure is compact. The simulation carries the detached wake,
+    // so a moving bowl does not need a long, overlapping trail-shaped splat.
+    float extent = radius + 0.24;
+    vec2 world = center + (direction * position.y + tangent * position.x) * extent;
 
     vWorld = world;
     vBowlData = aBowlData;
@@ -98,7 +80,6 @@ const bowlFieldFragmentShader = `
 
   ${gaussianChunk}
   ${basinMaskChunk}
-  ${bowlWakeLengthChunk}
 
   void main() {
     vec2 p = vWorld;
@@ -117,69 +98,13 @@ const bowlFieldFragmentShader = `
     float rimWidth = 0.036 + radius * 0.034;
     float rim = gaussianBand(d, radius, rimWidth);
     float footprint = 1.0 - smoothstep(radius - rimWidth * 0.35, radius + rimWidth * 0.20, d);
-    if (wakeStrength <= 0.001) {
-      gl_FragColor = vec4(rim * 0.012, rim * 0.105, rim * 0.56, footprint) * mask;
-      return;
-    }
-    float ahead = dot(offset, direction);
-    float behind = -ahead;
-    float activeBehind = max(behind, 0.0);
-    float across = dot(offset, tangent);
-    float motion = smoothstep(0.10, 0.86, wakeStrength);
-    float flow = wakeStrength * (0.46 + motion * 0.54);
-
-    float bowCrest = gaussianBand(ahead, radius * 0.82, 0.058 + radius * 0.070);
-    bowCrest *= expFalloff(across, radius * 0.96 + 0.12) * flow;
-
-    float bowTrough = gaussianBand(ahead, radius * 0.20, radius * 0.48 + 0.10);
-    bowTrough *= expFalloff(across, radius * 1.12 + 0.14) * flow;
-
-    float sideShoulder = gaussianBand(abs(across), radius * (0.78 + motion * 0.10), 0.056 + radius * 0.052);
-    sideShoulder *= gaussianBand(ahead, radius * 0.02, radius * 0.82 + 0.15) * flow;
-
-    float sternTrough = gaussianBand(behind, radius * 0.58, radius * 0.52 + 0.12);
-    sternTrough *= expFalloff(across, radius * 0.62 + 0.16) * flow;
-
-    float trail = smoothstep(0.02, radius * 0.42 + 0.16, behind);
-    trail *= exp(-activeBehind / bowlWakeLength(radius, wakeStrength)) * flow;
-
-    float vLine = abs(across) - activeBehind * (0.38 + motion * 0.13);
-    float vWake = expFalloff(vLine, 0.064 + radius * 0.042 + activeBehind * 0.016);
-    vWake *= trail;
-
-    float shearLine = abs(across) - activeBehind * (0.54 + motion * 0.10);
-    float shearWake = expFalloff(shearLine, 0.095 + radius * 0.052 + activeBehind * 0.018);
-    shearWake *= trail * motion;
-
-    float transverseWake = expFalloff(across, radius * 0.44 + activeBehind * 0.18 + 0.16);
-    transverseWake *= trail * motion;
-
-    float wakeWave = vWake * (0.018 + motion * 0.008)
-      + shearWake * (0.010 + motion * 0.006)
-      + transverseWake * (0.012 + motion * 0.006);
-
-    float wakeHeight = rim * 0.012
-      + bowCrest * 0.030
-      - bowTrough * 0.014
-      + sideShoulder * 0.012
-      - sternTrough * 0.020
-      + wakeWave;
-    float wakeEnergy = rim * 0.105
-      + bowCrest * 0.180
-      + bowTrough * 0.085
-      + sideShoulder * 0.105
-      + sternTrough * 0.130
-      + vWake * 0.180
-      + shearWake * 0.150
-      + transverseWake * 0.110;
-    float meniscus = rim * (0.56 + wakeStrength * 0.30) + bowCrest * 0.16 + sideShoulder * 0.08;
-
-    gl_FragColor = vec4(
-      clamp(wakeHeight * mask, -1.0, 1.0),
-      clamp(wakeEnergy * mask, 0.0, 2.0),
-      clamp(meniscus * mask, 0.0, 2.0),
-      clamp(footprint * mask, 0.0, 1.0)
-    );
+    // Opposite pressures at bow and stern redistribute the displaced water.
+    // This signed dipole integrates to zero around the hull and is evaluated
+    // for every moving bowl, whether driven by a pointer or by the current.
+    float radialMotion = dot(offset, direction) / max(d, 0.001);
+    float pressureBand = gaussianBand(d, radius, 0.065 + radius * 0.06);
+    float pressure = radialMotion * pressureBand * wakeStrength * 0.012;
+    gl_FragColor = vec4(rim * 0.008, pressure, rim * 0.56, footprint) * mask;
   }
 `;
 

@@ -6,8 +6,6 @@ export type DragState = {
   bowl: BowlBody;
   pointerId: number;
   offset: THREE.Vector2;
-  lastRippleAt: number;
-  lastRipplePoint: THREE.Vector2;
   velocity: DragVelocity;
 };
 

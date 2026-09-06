@@ -389,7 +389,6 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
       stage,
       cameraControls,
       bowlSystem,
-      ripples,
     }));
   }
 
