@@ -5,7 +5,7 @@ import {
   waterWaveSpeed,
 } from "../config";
 import { debugSettings } from "../settings";
-import { basinMaskChunk, gaussianChunk } from "./shader-chunks";
+import { basinMaskChunk } from "./shader-chunks";
 import type { SharedWaterUniforms } from "./uniforms";
 import type { WaterSimulationUniforms } from "./types";
 import { WaterImpulseQueue } from "./impulses";
@@ -74,7 +74,6 @@ const simulationFragmentShader = `
 
   varying vec2 vUv;
 
-  ${gaussianChunk}
   ${basinMaskChunk}
 
   float basinWall(vec2 p) {
@@ -115,7 +114,6 @@ const simulationFragmentShader = `
 
     float stepScale = clamp(uDelta * 60.0, 0.35, 1.65);
     velocity += laplacian * uWaveKick * stepScale;
-    velocity -= height * 0.018 * stepScale;
     velocity *= pow(0.982, stepScale);
     height += velocity * 0.34 * stepScale;
     height *= pow(0.998, stepScale);
@@ -142,15 +140,15 @@ const simulationFragmentShader = `
       vec4 impulse = uImpulseData[i];
       float radius = max(impulse.z, 0.001);
       vec2 scaledOffset = (p - impulse.xy) / radius;
-      float distance = length(scaledOffset);
-      float core = exp(-distance * distance * 2.35);
-      float shoulder = gaussianBand(distance, 0.76, 0.42);
-      float outerTrough = gaussianBand(distance, 1.34, 0.48);
-      float displacement = core * 0.78 - outerTrough * 0.34;
-      float pressure = core * 1.10 + shoulder * 0.46 - outerTrough * 0.22;
-      height += displacement * impulse.w * 0.30;
-      velocity += pressure * impulse.w * 0.62;
-      energy += (core * 0.36 + shoulder * 0.22 + outerTrough * 0.12) * abs(impulse.w);
+      // Laplacian-of-Gaussian displacement has zero area integral: a
+      // disturbance redistributes water instead of adding a mound. A single
+      // signed packet evolves under the wave equation, without a local spring
+      // ringing independently at every texel.
+      float q = dot(scaledOffset, scaledOffset) * 2.35;
+      float envelope = exp(-q);
+      float displacement = (1.0 - q) * envelope;
+      height += displacement * impulse.w * 0.60;
+      energy += abs(displacement * impulse.w) * 0.25;
     }
 
     // The wall band absorbs incident waves; reflectance dials the
@@ -336,7 +334,7 @@ export function createWaterSimulation({ renderer, uniforms }: WaterSimulationDep
       simulationUniforms.uDelta.value = clampedDelta;
 
       // Derive the integration constant from the wave speed in world units so
-      // ring propagation matches the analytic ripple layers on every device.
+      // propagation remains consistent across basin sizes and devices.
       // courant2 = (c * dt / dx)^2; the shader applies uWaveKick * stepScale to
       // velocity and 0.34 * stepScale to height. The 0.8 cardinal / 0.2 diagonal
       // stencil approximates 1.2 * dx^2 * laplacian(height), so fold that scale

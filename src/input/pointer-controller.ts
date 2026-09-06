@@ -309,7 +309,7 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
     pushDragVelocitySample(dragState.velocity, releaseTarget, releaseTime);
     releasedBowl.velocity.copy(dragState.velocity.releaseVelocity);
     deps.bowlSystem.addMomentum(releasedBowl, releasedBowl.velocity.length() * 4.2);
-    deps.ripples.emitDragReleaseRipple(dragState, releaseTime);
+    deps.ripples.emitDragReleaseRipple(dragState);
     releasedBowl.angularVelocity += THREE.MathUtils.clamp(
       releasedBowl.velocity.length() * 0.18,
       0,

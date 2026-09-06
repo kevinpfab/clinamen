@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { maxFlowJets, maxRipples, waterInteractionFieldSize } from "../config";
+import { maxFlowJets, waterInteractionFieldSize } from "../config";
 import {
   basinConstantsChunk,
   basinMaskChunk,
@@ -8,9 +8,8 @@ import {
 } from "./shader-chunks";
 import type { SharedWaterUniforms } from "./uniforms";
 
-// The analytic half of the wave field: ripple rings, jet plumes, and jet wakes
-// evaluated in closed form over the basin, once per frame at field resolution.
-// The GPGPU simulation supplies the rest; wave-state.ts composites the two.
+// Analytic jet plumes and nozzle texture, evaluated once per frame. Collision
+// and bowl-drag waves live exclusively in the GPGPU simulation.
 export type InteractionField = {
   update: () => void;
   dispose: () => void;
@@ -40,21 +39,13 @@ const interactionFieldVertexShader = `
   }
 `;
 
-// This pass is the heaviest consumer of value noise in the piece — it samples
-// inside both the per-ripple and the per-jet loop, at full field resolution,
-// every frame — so it reads the baked uNoiseMap like every other shader rather
-// than evaluating a sin-hash lattice in ALU.
 const interactionFieldFragmentShader = `
   precision highp float;
 
   uniform float uTime;
   uniform vec4 uSimWorld;
   uniform vec4 uPoolData;
-  uniform float uWaveSpeed;
   uniform sampler2D uNoiseMap;
-  uniform vec4 uRippleCenters[${maxRipples}];
-  uniform vec4 uRippleData[${maxRipples}];
-  uniform int uRippleCount;
   uniform vec4 uFlowJetData[${maxFlowJets}];
   uniform vec4 uFlowJetParams[${maxFlowJets}];
   uniform int uFlowJetCount;
@@ -65,157 +56,6 @@ const interactionFieldFragmentShader = `
   ${valueNoiseChunk}
   ${gaussianChunk}
   ${basinMaskChunk}
-
-  vec4 rippleField(vec2 p) {
-    float waveHeight = 0.0;
-    float waveSlope = 0.0;
-    float waveEnergy = 0.0;
-    float contactAccent = 0.0;
-    for (int i = 0; i < ${maxRipples}; i++) {
-      if (i >= uRippleCount) {
-        break;
-      }
-      vec2 center = uRippleCenters[i].xy;
-      float age = uRippleData[i].x;
-      float lifetime = max(uRippleData[i].y, 0.001);
-      float strength = uRippleData[i].z;
-      float shape = uRippleData[i].w;
-      vec2 direction = uRippleCenters[i].zw;
-      float directionLength = length(direction);
-      direction = directionLength > 0.001 ? direction / directionLength : vec2(1.0, 0.0);
-      vec2 tangent = vec2(-direction.y, direction.x);
-      vec2 offset = p - center;
-      float progress = clamp(age / lifetime, 0.0, 1.0);
-      float ageGate = smoothstep(0.0, 0.055, age);
-
-      if (shape > 0.5) {
-        float motion = clamp(directionLength - 1.0, 0.0, 1.0);
-        float ahead = dot(offset, direction);
-        float behind = -ahead;
-        float across = dot(offset, tangent);
-        float activeBehind = max(behind, 0.0);
-        float radiusHint = 0.24 + strength * 0.42 + motion * 0.22;
-        float travel = age * (0.92 + strength * 0.26 + motion * 0.34);
-        float packetWidth = radiusHint * (0.82 + motion * 0.24) + progress * 0.36;
-        float wavePacket = expFalloff(activeBehind - travel, packetWidth);
-        float fade = pow(1.0 - progress, 1.70) * ageGate;
-        float contactFade = pow(1.0 - progress, 3.20) * ageGate;
-        float distanceDamp = inversesqrt(1.0 + activeBehind * 0.38 + abs(across) * 0.18);
-
-        float wakeAngle = mix(0.36, 0.52, motion);
-        float divergentWidth = radiusHint * (0.24 + progress * 0.32) + activeBehind * 0.018;
-        float divergentLine = abs(across) - activeBehind * wakeAngle;
-        float divergentEnvelope = expFalloff(divergentLine, divergentWidth);
-        divergentEnvelope *= smoothstep(0.0, radiusHint * 0.42 + 0.055, behind);
-        divergentEnvelope *= exp(-activeBehind / (3.00 + motion * 1.55));
-        divergentEnvelope *= wavePacket;
-        float divergentPhase = activeBehind * (9.4 + motion * 4.6) - age * (8.2 + motion * 5.0) + abs(across) * 0.72;
-        float divergentWave = sin(divergentPhase) * divergentEnvelope;
-
-        float transverseWidth = radiusHint * (1.18 + motion * 0.48) + activeBehind * 0.19;
-        float transverseEnvelope = expFalloff(across, transverseWidth);
-        transverseEnvelope *= smoothstep(0.0, radiusHint * 0.55 + 0.070, behind);
-        transverseEnvelope *= exp(-activeBehind / (2.30 + motion * 1.12));
-        transverseEnvelope *= wavePacket;
-        float transversePhase = activeBehind * (7.1 + motion * 3.1) - age * (6.8 + motion * 4.1);
-        float transverseWave = sin(transversePhase) * transverseEnvelope;
-
-        float bowCrest = gaussianBand(ahead, radiusHint * 0.30, radiusHint * (0.54 + motion * 0.18));
-        bowCrest *= expFalloff(across, radiusHint * (1.75 + motion * 0.46));
-        bowCrest *= 1.0 - smoothstep(radiusHint * 2.8, radiusHint * 5.2, length(offset));
-
-        float sternTrough = gaussianBand(behind, radiusHint * 0.62, radiusHint * (0.76 + motion * 0.22));
-        sternTrough *= expFalloff(across, radiusHint * (1.24 + motion * 0.32));
-
-        float shoulder = gaussianBand(abs(across), radiusHint * (0.72 + motion * 0.22), radiusHint * 0.34);
-        shoulder *= gaussianBand(ahead, radiusHint * 0.02, radiusHint * (1.10 + motion * 0.32));
-
-        float amplitude = strength * fade * (0.34 + motion * 0.24) * distanceDamp;
-        float contactAmplitude = strength * contactFade * (0.28 + motion * 0.16);
-        float localHeight = (divergentWave * 0.54 + transverseWave * 0.32) * amplitude
-          + (bowCrest * 0.34 + shoulder * 0.10 - sternTrough * 0.24) * contactAmplitude;
-        float localEnergy = (
-          abs(divergentWave) * 1.05
-          + abs(transverseWave) * 0.72
-        ) * amplitude + (
-          bowCrest * 0.78
-          + sternTrough * 0.54
-          + shoulder * 0.26
-        ) * contactAmplitude;
-
-        waveHeight += localHeight;
-        waveSlope += localEnergy * (2.40 + motion * 0.70);
-        waveEnergy += localEnergy * 0.82;
-        contactAccent += (bowCrest + shoulder * 0.40) * strength * contactFade * 0.28;
-        continue;
-      }
-
-      float d = length(offset);
-      float angle = atan(offset.y, offset.x);
-      vec2 radialDirection = d > 0.001 ? offset / d : direction;
-      float alongImpact = dot(offset, direction);
-      float acrossImpact = dot(offset, tangent);
-      float organic = sin(angle * 4.0 + age * 0.85 + center.x) * 0.030;
-      organic += sin(angle * 7.0 - age * 1.10 + center.y) * 0.020;
-      organic += (valueNoise(offset * 0.74 + center * 0.13 + vec2(age * 0.08, -age * 0.05)) - 0.5) * 0.038;
-
-      float travel = age * uWaveSpeed;
-      float early = 1.0 - smoothstep(0.0, 0.26, progress);
-      float forward = dot(radialDirection, direction);
-      float directionalSpread = mix(
-        1.0,
-        0.82 + 0.30 * abs(dot(radialDirection, tangent)) + 0.20 * max(forward, 0.0),
-        early
-      );
-      float spread = inversesqrt(1.0 + d * 0.78);
-      float fade = pow(1.0 - progress, 1.62) * ageGate * spread;
-      float amplitude = strength * fade * 1.04;
-      float compression = expFalloff(alongImpact, 0.075) * expFalloff(acrossImpact, 0.46);
-      compression *= early * early * smoothstep(0.0, 0.035, age) * strength;
-
-      float signedDistance = d - travel + organic;
-      float packetWidth = 0.130 + progress * 0.220 + strength * 0.036;
-      float packet = expFalloff(signedDistance, packetWidth);
-      float crest = expFalloff(signedDistance, packetWidth * 0.42);
-      float trough = expFalloff(signedDistance + packetWidth * 0.64, packetWidth * 0.58);
-      float recoveryCrest = expFalloff(signedDistance + packetWidth * 1.34, packetWidth * 0.82);
-      float tail = expFalloff(signedDistance + packetWidth * 2.20, packetWidth * 1.35);
-      float carrierFrequency = mix(28.0, 18.0, progress);
-      float carrier = sin(signedDistance * carrierFrequency + organic * 10.0);
-      float fineRipple = carrier * packet * (0.13 + strength * 0.08);
-      float pulse = (
-        crest * 1.05
-        - trough * 0.82
-        + recoveryCrest * 0.42
-        - tail * 0.12
-        + fineRipple
-      ) * directionalSpread;
-      float localSlope = (
-        crest * 1.05
-        + trough * 0.82
-        + recoveryCrest * 0.42
-        + tail * 0.12
-        + abs(carrier) * packet * 0.18
-      ) / packetWidth;
-      float frontAccent = (
-        crest * 0.80
-        + trough * 0.36
-        + recoveryCrest * 0.20
-        + abs(carrier) * packet * 0.10
-      ) * directionalSpread * amplitude;
-
-      waveHeight += pulse * amplitude;
-      waveSlope += localSlope * amplitude * 0.66;
-      waveEnergy += (crest + trough * 0.74 + recoveryCrest * 0.38 + tail * 0.18) * amplitude * 1.10;
-
-      waveHeight += compression * 0.024;
-      waveEnergy += compression * 0.26 + frontAccent * 0.56;
-      waveSlope += compression * 0.28;
-      contactAccent += compression * 0.28 + frontAccent * 1.18;
-    }
-
-    return vec4(waveHeight, waveSlope, waveEnergy, contactAccent);
-  }
 
   float flowChannelField(vec2 p) {
     float energy = 0.0;
@@ -327,15 +167,14 @@ const interactionFieldFragmentShader = `
       return;
     }
 
-    vec4 ripple = rippleField(p);
     float flowChannel = flowChannelField(p);
     vec3 flowWake = flowRippleField(p);
 
     gl_FragColor = vec4(
-      ripple.x * 0.66 + flowWake.x * 0.84 + flowChannel * 0.0035,
-      ripple.y * 0.44 + flowWake.y * 0.78 + flowChannel * 0.040,
-      ripple.z * 0.66 + flowWake.z * 0.86 + flowChannel * 0.072,
-      ripple.w * 1.24 + flowChannel
+      flowWake.x * 0.84 + flowChannel * 0.0035,
+      flowWake.y * 0.78 + flowChannel * 0.040,
+      flowWake.z * 0.86 + flowChannel * 0.072,
+      flowChannel
     ) * mask;
   }
 `;
@@ -358,11 +197,7 @@ export function createInteractionField({
       uTime: uniforms.uTime,
       uSimWorld: uniforms.uSimWorld,
       uPoolData: uniforms.uPoolData,
-      uWaveSpeed: uniforms.uWaveSpeed,
       uNoiseMap: uniforms.uNoiseMap,
-      uRippleCenters: uniforms.uRippleCenters,
-      uRippleData: uniforms.uRippleData,
-      uRippleCount: uniforms.uRippleCount,
       uFlowJetData: uniforms.uFlowJetData,
       uFlowJetParams: uniforms.uFlowJetParams,
       uFlowJetCount: uniforms.uFlowJetCount,

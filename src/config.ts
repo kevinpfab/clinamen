@@ -32,7 +32,6 @@ export const bowlImpactInwardReachScale = isMobilePerformanceTarget ? 4.25 : 1.0
 export const bowlImpactAnimationSpeed = isMobilePerformanceTarget ? 2.35 : 1.0;
 
 // --- Simulation capacities (also interpolated into shader sources) ---
-export const maxRipples = 14;
 export const maxWaterBowls = 100;
 export const maxWaterImpulses = 96;
 export const maxFlowJets = maxBasinJetSourceCount;
@@ -42,10 +41,8 @@ export const waterSimulationMaxSubsteps = isMobilePerformanceTarget ? 2 : 3;
 export const bowlFieldTextureSize = isMobilePerformanceTarget ? 256 : 384;
 export const waterInteractionFieldSize = isMobilePerformanceTarget ? 256 : 384;
 
-// The propagation speed of simulated and analytic ripples, in world units per
-// second. The GPGPU sim derives its integration constant from this so ring
-// speed no longer depends on texture resolution or pool size, and the
-// analytic ripple layers use the same value so both ring systems co-travel.
+// Propagation speed of the simulated height field in world units per second.
+// The integration constant accounts for texture resolution and pool size.
 export const waterWaveSpeed = 1.15;
 
 // --- Intro emergence ---

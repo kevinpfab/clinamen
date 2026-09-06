@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { maxFlowJets, maxRipples, waterWaveSpeed } from "../config";
+import { maxFlowJets } from "../config";
 import type { WaterUniforms } from "./types";
 
 export type SharedWaterUniforms = WaterUniforms & Record<string, THREE.IUniform>;
@@ -28,14 +28,6 @@ export function createWaterUniforms(): SharedWaterUniforms {
       uNoiseMap: { value: null },
       uSimWorld: { value: new THREE.Vector4(-1, -1, 2, 2) },
       uPoolData: { value: new THREE.Vector4(0, 0, 1, 0.72) },
-      uWaveSpeed: { value: waterWaveSpeed },
-      uRippleCenters: {
-        value: Array.from({ length: maxRipples }, () => new THREE.Vector4(0, 0, 0, 0)),
-      },
-      uRippleData: {
-        value: Array.from({ length: maxRipples }, () => new THREE.Vector4(0, 0, 0, 0)),
-      },
-      uRippleCount: { value: 0 },
       uFlowJetData: {
         value: Array.from({ length: maxFlowJets }, () => new THREE.Vector4(0, 0, 1, 0)),
       },

@@ -1,124 +1,95 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import * as THREE from "three";
-import { createRippleField, type RippleField } from "../src/water/ripples";
-import { createWaterUniforms, type SharedWaterUniforms } from "../src/water/uniforms";
+import { createRippleField } from "../src/water/ripples";
 import type { WaterSimulation } from "../src/water/simulation";
-import { maxRipples } from "../src/config";
+import type { DragState } from "../src/input/types";
+import { createDragVelocity } from "../src/input/drag-velocity";
+import { getCollisionRippleStrength } from "../src/physics/collision";
 
-// The ripple field feeds the simulation but does not need one to be tested: it
-// only ever calls the queueing half of the interface.
-function createSimulationStub(): WaterSimulation {
-  return {
-    queueImpulse: () => {},
-    queueDirectionalImpulse: () => {},
+function createFixture() {
+  const impulses: Array<{ x: number; z: number; radius: number; strength: number }> = [];
+  const simulation: WaterSimulation = {
+    queueImpulse: (x, z, radius, strength) => impulses.push({ x, z, radius, strength }),
+    queueDirectionalImpulse: () => { throw new Error("Historical multi-source waves must not be emitted"); },
     queueDirectionalImpulseComponents: () => {},
     clear: () => {},
     update: () => {},
     dispose: () => {},
   };
+  return { impulses, ripples: createRippleField({ simulation }) };
 }
 
-let uniforms: SharedWaterUniforms;
-let ripples: RippleField;
+function createDragState(speed: number): DragState {
+  return {
+    bowl: {
+      id: 0, instanceIndex: 0, mesh: new THREE.Object3D(), visual: new THREE.Object3D(),
+      resonance: { age: 0, lifetime: 1, strength: 0, toneRatio: 0.5, impactDirection: new THREE.Vector2(1, 0), envelope: 0 },
+      radius: 0.5, contactRadius: 0.5, toneRatio: 0.5, velocity: new THREE.Vector2(speed, 0),
+      waterVelocity: new THREE.Vector2(speed, 0), emergence: 1, momentumStrength: 0, angularVelocity: 0, lastImpactAt: -10, phase: 0,
+    },
+    pointerId: 1, offset: new THREE.Vector2(), lastRippleAt: 0, lastRipplePoint: new THREE.Vector2(),
+    velocity: createDragVelocity(new THREE.Vector2(), 0),
+  };
+}
 
-beforeEach(() => {
-  uniforms = createWaterUniforms();
-  ripples = createRippleField({ uniforms, simulation: createSimulationStub() });
-  // The pool starts empty; publish once so the uniform slots are seeded.
-  ripples.update(0);
-});
-
-describe("ripple pool", () => {
-  test("clearing retires active rings and immediately updates consumers", () => {
-    ripples.addCollisionRipple(1, 2, 0.4);
-    ripples.update(0.1);
-    expect(uniforms.uRippleCount.value).toBe(1);
-    ripples.clear();
-    expect(uniforms.uRippleCount.value).toBe(0);
-    expect(uniforms.uRippleData.value[0].z).toBe(0);
-    ripples.update(0.1);
-    expect(uniforms.uRippleCount.value).toBe(0);
-  });
-
-  test("publishes an empty pool as zeroed uniform slots", () => {
-    expect(uniforms.uRippleCount.value).toBe(0);
-    for (let i = 0; i < maxRipples; i += 1) {
-      expect(uniforms.uRippleCenters.value[i].toArray()).toEqual([0, 0, 1, 0]);
-      expect(uniforms.uRippleData.value[i].toArray()).toEqual([0, 1, 0, 0]);
-    }
-  });
-
-  test("evicts the oldest ripples once the pool is full", () => {
-    const overflow = maxRipples + 6;
-    for (let i = 0; i < overflow; i += 1) {
-      ripples.addCollisionRipple(i, 0, 0.4);
-    }
-    ripples.update(0);
-
-    expect(uniforms.uRippleCount.value).toBe(maxRipples);
-
-    // Newest first, and only the newest maxRipples survive.
-    const centers = uniforms.uRippleCenters.value
-      .slice(0, maxRipples)
-      .map((center: THREE.Vector4) => center.x);
-    const expected = Array.from({ length: maxRipples }, (_, i) => overflow - 1 - i);
-    expect(centers).toEqual(expected);
-  });
-
-  test("ages ripples and retires them at their lifetime", () => {
-    ripples.addCollisionRipple(0, 0, 0.4, new THREE.Vector2(1, 0), 1);
-    ripples.update(0.25);
-
-    expect(uniforms.uRippleCount.value).toBe(1);
-    expect(uniforms.uRippleData.value[0].x).toBeCloseTo(0.25, 10);
-    expect(uniforms.uRippleData.value[0].y).toBe(1);
-
-    ripples.update(0.75);
-    expect(uniforms.uRippleCount.value).toBe(0);
-    expect(uniforms.uRippleData.value[0].toArray()).toEqual([0, 1, 0, 0]);
-  });
-
-  test("clamps collision strength into the visible ring range", () => {
-    ripples.addCollisionRipple(0, 0, 12);
-    ripples.addCollisionRipple(0, 0, 0);
-    ripples.update(0);
-
-    expect(uniforms.uRippleData.value[0].z).toBeCloseTo(0.06, 10);
-    expect(uniforms.uRippleData.value[1].z).toBeCloseTo(0.88, 10);
-  });
-
-  test("normalizes the ripple direction and falls back for a zero vector", () => {
-    ripples.addCollisionRipple(0, 0, 0.4, new THREE.Vector2(3, 4));
-    ripples.addCollisionRipple(0, 0, 0.4, new THREE.Vector2(0, 0));
-    ripples.update(0);
-
-    expect(uniforms.uRippleCenters.value[0].z).toBe(1);
-    expect(uniforms.uRippleCenters.value[0].w).toBe(0);
-    expect(uniforms.uRippleCenters.value[1].z).toBeCloseTo(0.6, 10);
-    expect(uniforms.uRippleCenters.value[1].w).toBeCloseTo(0.8, 10);
-  });
-
-  test("collision ripples are published as radial rings", () => {
+describe("height-field ripple sources", () => {
+  test("a collision injects exactly one impulse at its physical contact", () => {
+    const { ripples, impulses } = createFixture();
     ripples.addCollisionRipple(1.5, -2.5, 0.4);
-    ripples.update(0);
-
-    expect(uniforms.uRippleCenters.value[0].x).toBe(1.5);
-    expect(uniforms.uRippleCenters.value[0].y).toBe(-2.5);
-    expect(uniforms.uRippleData.value[0].w).toBe(0);
+    expect(impulses).toHaveLength(1);
+    expect(impulses[0].x).toBe(1.5);
+    expect(impulses[0].z).toBe(-2.5);
+    expect(impulses[0].strength).toBeGreaterThan(0);
   });
 
-  test("each field owns its own pool", () => {
-    const otherUniforms = createWaterUniforms();
-    const other = createRippleField({
-      uniforms: otherUniforms,
-      simulation: createSimulationStub(),
-    });
+  test("zero, negative and nonfinite collisions inject no pressure", () => {
+    const { ripples, impulses } = createFixture();
+    for (const strength of [0, -1, NaN, Infinity]) ripples.addCollisionRipple(0, 0, strength);
+    ripples.addCollisionRipple(NaN, 0, 0.4);
+    ripples.addCollisionRipple(0, Infinity, 0.4);
+    expect(impulses).toHaveLength(0);
+  });
 
-    ripples.addCollisionRipple(0, 0, 0.4);
-    ripples.update(0);
-    other.update(0);
+  test("soft contact approaches zero instead of receiving a minimum splash", () => {
+    const { ripples, impulses } = createFixture();
+    ripples.addCollisionRipple(0, 0, 0.001);
+    ripples.addCollisionRipple(0, 0, 0.1);
+    expect(impulses[0].strength / impulses[1].strength).toBeCloseTo(0.01, 10);
+    expect(getCollisionRippleStrength(0, 0, 0)).toBe(0);
+    expect(getCollisionRippleStrength(-0.00001, 0.00001, 0)).toBeLessThan(0.002);
+  });
 
-    expect(uniforms.uRippleCount.value).toBe(1);
-    expect(otherUniforms.uRippleCount.value).toBe(0);
+  test("extreme collision inputs stay within the simulation's pressure budget", () => {
+    const { ripples, impulses } = createFixture();
+    ripples.addCollisionRipple(0, 0, 100);
+    expect(impulses).toHaveLength(1);
+    expect(impulses[0].strength).toBeLessThanOrEqual(0.42);
+    expect(impulses[0].radius).toBeLessThan(1);
+  });
+
+  test("drag sources stay behind the hull and stop when the held bowl stops", () => {
+    const { ripples, impulses } = createFixture();
+    const state = createDragState(0.5);
+    ripples.updateDragWaterInteraction(state, new THREE.Vector2(), new THREE.Vector2(0.4, 0), 0.2);
+    expect(impulses.length).toBeGreaterThan(0);
+    expect(impulses.length).toBeLessThanOrEqual(2);
+    for (const impulse of impulses) {
+      expect(impulse.x).toBeLessThan(0.4);
+      expect(impulse.strength).toBeLessThan(0);
+    }
+    const count = impulses.length;
+    state.bowl.velocity.set(0, 0);
+    ripples.updateDragWaterInteraction(state, new THREE.Vector2(0.4, 0), new THREE.Vector2(0.4, 0), 1);
+    ripples.emitDragReleaseRipple(state);
+    expect(impulses).toHaveLength(count);
+  });
+
+  test("rapid pointer updates cannot emit an unlimited number of pressure sources", () => {
+    const { ripples, impulses } = createFixture();
+    const state = createDragState(0.5);
+    ripples.updateDragWaterInteraction(state, new THREE.Vector2(), new THREE.Vector2(0.4, 0), 0.2);
+    const count = impulses.length;
+    ripples.updateDragWaterInteraction(state, new THREE.Vector2(0.4, 0), new THREE.Vector2(0.401, 0), 0.201);
+    expect(impulses).toHaveLength(count);
   });
 });

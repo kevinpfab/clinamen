@@ -42,6 +42,7 @@ export type BowlCollisionEvent = {
   closingSpeed: number;
   impactMomentum: number;
   strength: number;
+  rippleStrength: number;
 };
 
 export const DEFAULT_BOWL_COLLISION_SETTINGS: BowlCollisionSettings = {
@@ -85,7 +86,13 @@ export function getCollisionRippleStrength(
 ) {
   const contactSpeed = Math.max(Math.abs(separatingSpeed), relativeSpeed * 0.24);
   const contactEnergy = contactSpeed * 2.0 + overlap * 2.2;
-  return clamp(0.10 + Math.sqrt(Math.max(0, contactEnergy)) * 0.22, 0.10, 0.44);
+  return clamp(Math.sqrt(Math.max(0, contactEnergy)) * 0.22, 0, 0.44);
+}
+
+// Resonance/audio retain their established audible response while the water
+// receives a continuously scaled pressure impulse without a minimum splash.
+function getCollisionImpactStrength(separatingSpeed: number, relativeSpeed: number, overlap: number) {
+  return clamp(0.10 + getCollisionRippleStrength(separatingSpeed, relativeSpeed, overlap), 0.10, 0.44);
 }
 
 let contactPass = 0;
@@ -188,7 +195,12 @@ function updateContactState(
         relativeSpeed: contact.relativeSpeed,
         closingSpeed: contact.closingSpeed,
         impactMomentum: getBowlPairImpactMomentum(a.massRadius, b.massRadius, contact.closingSpeed),
-        strength: getCollisionRippleStrength(
+        strength: getCollisionImpactStrength(
+          contact.separatingSpeed,
+          contact.relativeSpeed,
+          contact.overlap,
+        ),
+        rippleStrength: getCollisionRippleStrength(
           contact.separatingSpeed,
           contact.relativeSpeed,
           contact.overlap,

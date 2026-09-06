@@ -178,7 +178,7 @@ export function createWaterLab(deps: WaterLabDeps): WaterLab {
     beforeStep() {
       frame += 1;
       const elapsed = frame * waterSimulationStep;
-      if (scenario === "Ripple" && frame === 15) ripples.addCollisionRipple(-1.1, 0, 0.38, new THREE.Vector2(1, 0), 2.8);
+      if (scenario === "Ripple" && frame === 15) ripples.addCollisionRipple(-1.1, 0, 0.38);
       if (!drag) return null;
       const bowl = drag.bowl;
       previousPoint.set(bowl.mesh.position.x, bowl.mesh.position.z);

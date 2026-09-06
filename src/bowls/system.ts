@@ -129,8 +129,8 @@ export function createBowlSystem({ bus, scene, materials, currentEnabled = true 
       x: contact.normalX * poolRadius,
       z: contact.normalZ * poolRadius,
       strength: THREE.MathUtils.clamp(
-        0.18 + Math.sqrt(Math.max(0, contact.impactStrength)) * 0.18,
-        0.18,
+        Math.sqrt(Math.max(0, contact.impactStrength)) * 0.18,
+        0,
         0.42,
       ),
       direction: scratchNormal.set(-contact.normalX, -contact.normalZ),
@@ -277,7 +277,7 @@ export function createBowlSystem({ bus, scene, materials, currentEnabled = true 
     bus.emit("ripple", {
       x: event.contactX,
       z: event.contactZ,
-      strength: event.strength,
+      strength: event.rippleStrength,
       direction: contactNormal,
     });
 

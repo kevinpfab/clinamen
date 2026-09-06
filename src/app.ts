@@ -89,7 +89,7 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
   const bowlSystem = own(createBowlSystem({ bus, scene, materials: bowlMaterials, currentEnabled: !waterLabEnabled }));
 
   const simulation = own(createWaterSimulation({ renderer, uniforms: waterUniforms }));
-  const ripples = createRippleField({ uniforms: waterUniforms, simulation });
+  const ripples = createRippleField({ simulation });
   const interactionField = own(createInteractionField({ renderer, uniforms: waterUniforms }));
   const bowlField = own(createBowlField({ renderer, uniforms: waterUniforms }));
   const waveState = own(createWaveState({ renderer, uniforms: waterUniforms }));
@@ -119,7 +119,6 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
   function clearWaterState() {
     simulationClock.resetAccumulator();
     simulation.clear();
-    ripples.clear();
   }
 
   function updateWorldSize() {
@@ -248,7 +247,6 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     frameDiagnostics.recordStep("bowls");
     bowlSystem.resolveCollisions(elapsed, heldBowl);
     frameDiagnostics.recordStep("collisions");
-    ripples.update(delta);
     frameDiagnostics.recordStep("ripples");
     bowlSystem.updateResonance(delta);
     frameDiagnostics.recordStep("resonance");
@@ -373,8 +371,8 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     }
   }
 
-  const offRipple = bus.on("ripple", ({ x, z, strength, direction }) => {
-    ripples.addCollisionRipple(x, z, strength, direction);
+  const offRipple = bus.on("ripple", ({ x, z, strength }) => {
+    ripples.addCollisionRipple(x, z, strength);
   });
   const offTone = bus.on("tone", ({ sizeRatio, strength, sustain }) => {
     audioEngine?.play(sizeRatio, strength, sustain);

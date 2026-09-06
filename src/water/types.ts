@@ -1,15 +1,5 @@
 import * as THREE from "three";
 
-export type Ripple = {
-  center: THREE.Vector2;
-  direction: THREE.Vector2;
-  age: number;
-  lifetime: number;
-  strength: number;
-  shape: 0 | 1;
-  lastDisturbedAt: number;
-};
-
 export type WaterUniforms = {
   uTime: { value: number };
   uHeightMap: { value: THREE.Texture | null };
@@ -21,10 +11,6 @@ export type WaterUniforms = {
   uNoiseMap: { value: THREE.Texture | null };
   uSimWorld: { value: THREE.Vector4 };
   uPoolData: { value: THREE.Vector4 };
-  uWaveSpeed: { value: number };
-  uRippleCenters: { value: THREE.Vector4[] };
-  uRippleData: { value: THREE.Vector4[] };
-  uRippleCount: { value: number };
   uFlowJetData: { value: THREE.Vector4[] };
   uFlowJetParams: { value: THREE.Vector4[] };
   uFlowJetCount: { value: number };
