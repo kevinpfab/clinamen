@@ -234,10 +234,9 @@ function createReflectionMaterial(uniforms: SharedWaterUniforms) {
 const bowlResonanceFragmentShader = `
       precision highp float;
 
-      uniform vec2 uOuterFeather;
-
       varying vec2 vRadial;
       varying float vRadiusBand;
+      varying float vRimProfile;
       varying vec4 vRimPulse;
       varying vec2 vImpactDirection;
 
@@ -279,7 +278,9 @@ const bowlResonanceFragmentShader = `
         float insideDistance = max(1.0 - vRadiusBand, 0.0);
         float rimCore = 1.0 - smoothstep(inwardReach * 0.62, inwardReach, insideDistance);
         float innerFeather = smoothstep(${bowlImpactRimInnerRadius.toFixed(3)}, ${bowlRimInnerFeatherEnd.toFixed(3)}, vRadiusBand);
-        float outerFeather = 1.0 - smoothstep(uOuterFeather.x, uOuterFeather.y, vRadiusBand);
+        // Fade at the actual end of the curved band, independent of radius
+        // or the hero's finer tessellation.
+        float outerFeather = 1.0 - smoothstep(0.85, 1.0, vRimProfile);
         float shimmer = 0.92
           + sin(atan(vRadial.y, vRadial.x) * 10.0 + age * 8.2 + toneRatio * BASIN_PI) * 0.08;
 
@@ -313,10 +314,6 @@ const bowlResonanceMaterialSettings: THREE.ShaderMaterialParameters = {
 function createBowlResonanceMaterial() {
   return new THREE.ShaderMaterial({
     ...bowlResonanceMaterialSettings,
-    // The flat field rims fade at the pool-facing edge, r = 1.
-    uniforms: {
-      uOuterFeather: { value: new THREE.Vector2(0.992, 1.0) },
-    },
     vertexShader: `
       precision highp float;
 
@@ -325,6 +322,7 @@ function createBowlResonanceMaterial() {
 
       varying vec2 vRadial;
       varying float vRadiusBand;
+      varying float vRimProfile;
       varying vec4 vRimPulse;
       varying vec2 vImpactDirection;
 
@@ -333,6 +331,7 @@ function createBowlResonanceMaterial() {
         float radius = max(length(rim), 0.001);
         vRadial = rim / radius;
         vRadiusBand = radius;
+        vRimProfile = uv.y;
         vRimPulse = aRimPulse;
         vImpactDirection = aRimImpactDirection;
         vec4 instancePosition = vec4(position, 1.0);
@@ -354,10 +353,6 @@ function createBowlHeroResonanceMaterial() {
     uniforms: {
       uRimPulse: { value: new THREE.Vector4(0, 1, 0, 0) },
       uRimImpactDirection: { value: new THREE.Vector2(1, 0) },
-      // The hero's 3D band curls past r = 1 over the rounded lip's outer face;
-      // fade further out so that face lights and tapers softly at the edge
-      // rather than being clipped at the pool line.
-      uOuterFeather: { value: new THREE.Vector2(0.996, 1.018) },
     },
     vertexShader: `
       precision highp float;
@@ -367,6 +362,7 @@ function createBowlHeroResonanceMaterial() {
 
       varying vec2 vRadial;
       varying float vRadiusBand;
+      varying float vRimProfile;
       varying vec4 vRimPulse;
       varying vec2 vImpactDirection;
 
@@ -375,6 +371,7 @@ function createBowlHeroResonanceMaterial() {
         float radius = max(length(rim), 0.001);
         vRadial = rim / radius;
         vRadiusBand = radius;
+        vRimProfile = uv.y;
         vRimPulse = uRimPulse;
         vImpactDirection = uRimImpactDirection;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
