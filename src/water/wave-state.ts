@@ -11,7 +11,8 @@ import type { SharedWaterUniforms } from "./uniforms";
 // The full-screen water surface and basin floor shaders then read one or two
 // texels here instead of independently reconstructing the wave state from
 // three textures per pixel — and both layers see identical wave data by
-// construction.
+// construction. State and detail share one MRT pass, so each source field is
+// sampled only once; derived slopes still run afterward on the completed data.
 export type WaveState = {
   update: () => void;
   dispose: () => void;
@@ -30,6 +31,7 @@ const waveFieldOptions = {
   depthBuffer: false,
   stencilBuffer: false,
   generateMipmaps: false,
+  colorSpace: THREE.NoColorSpace,
 };
 
 const combineVertexShader = `
@@ -55,8 +57,11 @@ const combineHeader = `
   ${basinMaskChunk}
 `;
 
-const waveStateFragmentShader = `
+const combineFragmentShader = `
   ${combineHeader}
+
+  layout(location = 0) out vec4 waveState;
+  layout(location = 1) out vec4 waveDetail;
 
   void main() {
     vec2 p = uSimWorld.xy + vUv * uSimWorld.zw;
@@ -75,25 +80,13 @@ const waveStateFragmentShader = `
       + abs(simulated) * 0.90
       + interaction.z
       + bowl.y * 0.72;
-    gl_FragColor = vec4(waveHeight, waveSlope, waveEnergy, interaction.w);
-  }
-`;
-
-const waveDetailFragmentShader = `
-  ${combineHeader}
-
-  void main() {
-    vec2 p = uSimWorld.xy + vUv * uSimWorld.zw;
-    float mask = basinMask(p);
-    vec3 sim = texture2D(uHeightMap, vUv).rgb * mask;
-    vec4 interaction = texture2D(uInteractionFieldMap, vUv);
-    vec4 bowl = texture2D(uBowlFieldMap, vUv);
     float normalHeight = sim.r * 0.360
       + sim.b * 0.007
       + interaction.x * 0.150
       + interaction.z * 0.004
       + bowl.x * 0.056;
-    gl_FragColor = vec4(normalHeight, bowl.z, bowl.a, sim.b);
+    waveState = vec4(waveHeight, waveSlope, waveEnergy, interaction.w);
+    waveDetail = vec4(normalHeight, bowl.z, bowl.a, sim.b);
   }
 `;
 
@@ -134,21 +127,21 @@ const waveDerivedFragmentShader = `
 `;
 
 export function createWaveState({ renderer, uniforms }: WaveStateDeps): WaveState {
-  function createTarget(name: string) {
-    const target = new THREE.WebGLRenderTarget(
-      waterSimulationSize,
-      waterSimulationSize,
-      waveFieldOptions,
-    );
-    target.texture.name = name;
-    return target;
-  }
-
-  const stateTarget = createTarget("Basin composite wave state");
-  const detailTarget = createTarget("Basin composite wave detail");
-  const derivedTarget = createTarget("Basin derived wave slope");
-  uniforms.uWaveStateMap.value = stateTarget.texture;
-  uniforms.uWaveDetailMap.value = detailTarget.texture;
+  const compositeTarget = new THREE.WebGLRenderTarget(
+    waterSimulationSize,
+    waterSimulationSize,
+    { ...waveFieldOptions, count: 2 },
+  );
+  compositeTarget.textures[0].name = "Basin composite wave state";
+  compositeTarget.textures[1].name = "Basin composite wave detail";
+  const derivedTarget = new THREE.WebGLRenderTarget(
+    waterSimulationSize,
+    waterSimulationSize,
+    waveFieldOptions,
+  );
+  derivedTarget.texture.name = "Basin derived wave slope";
+  uniforms.uWaveStateMap.value = compositeTarget.textures[0];
+  uniforms.uWaveDetailMap.value = compositeTarget.textures[1];
   uniforms.uWaveDerivedMap.value = derivedTarget.texture;
 
   const combineUniforms: Record<string, THREE.IUniform> = {
@@ -159,16 +152,12 @@ export function createWaveState({ renderer, uniforms }: WaveStateDeps): WaveStat
     uPoolData: uniforms.uPoolData,
   };
 
-  const stateMaterial = new THREE.ShaderMaterial({
+  const combineMaterial = new THREE.ShaderMaterial({
     uniforms: combineUniforms,
     vertexShader: combineVertexShader,
-    fragmentShader: waveStateFragmentShader,
-  });
-
-  const detailMaterial = new THREE.ShaderMaterial({
-    uniforms: combineUniforms,
-    vertexShader: combineVertexShader,
-    fragmentShader: waveDetailFragmentShader,
+    fragmentShader: combineFragmentShader,
+    glslVersion: THREE.GLSL3,
+    toneMapped: false,
   });
 
   const derivedMaterial = new THREE.ShaderMaterial({
@@ -183,11 +172,12 @@ export function createWaveState({ renderer, uniforms }: WaveStateDeps): WaveStat
     },
     vertexShader: combineVertexShader,
     fragmentShader: waveDerivedFragmentShader,
+    toneMapped: false,
   });
 
   const passScene = new THREE.Scene();
   const passCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  const passQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), stateMaterial);
+  const passQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), combineMaterial);
   passScene.add(passQuad);
 
   function renderPass(material: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget) {
@@ -198,19 +188,16 @@ export function createWaveState({ renderer, uniforms }: WaveStateDeps): WaveStat
 
   return {
     update() {
-      renderPass(stateMaterial, stateTarget);
-      renderPass(detailMaterial, detailTarget);
+      renderPass(combineMaterial, compositeTarget);
       renderPass(derivedMaterial, derivedTarget);
       renderer.setRenderTarget(null);
     },
 
     dispose() {
-      stateMaterial.dispose();
-      detailMaterial.dispose();
+      combineMaterial.dispose();
       derivedMaterial.dispose();
       passQuad.geometry.dispose();
-      stateTarget.dispose();
-      detailTarget.dispose();
+      compositeTarget.dispose();
       derivedTarget.dispose();
     },
   };
