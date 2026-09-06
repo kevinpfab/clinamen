@@ -47,7 +47,8 @@ const bowlFieldVertexShader = `
     float radius = max(aBowlData.z, 0.001);
     float speed = length(aBowlVelocity.xy);
     vec2 direction = speed > 0.0001 ? aBowlVelocity.xy / speed : vec2(1.0, 0.0);
-    vec2 tangent = vec2(-direction.y, direction.x);
+    // Preserve the source quad's counterclockwise winding in simulation UV.
+    vec2 tangent = vec2(direction.y, -direction.x);
 
     // Trapezoid extents sized to the influence terms in the fragment
     // shader: rim + bow crest ahead, the exponential wake trail behind,
