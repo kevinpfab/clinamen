@@ -56,6 +56,7 @@ type BowlSystemDeps = {
   bus: EventBus<BasinEvents>;
   scene: THREE.Scene;
   materials: BowlMaterials;
+  currentEnabled?: boolean;
 };
 
 const bowlMomentumDecayRate = 0.38;
@@ -67,7 +68,7 @@ const maxBowlMomentumStrength = 1;
 const layoutClearance = 0.06;
 const layoutRelaxationIterations = 120;
 
-export function createBowlSystem({ bus, scene, materials }: BowlSystemDeps): BowlSystem {
+export function createBowlSystem({ bus, scene, materials, currentEnabled = true }: BowlSystemDeps): BowlSystem {
   let bowls: BowlBody[] = [];
   // While frozen (the intro, until every bowl has surfaced) bowls only spin
   // in place: no drift, no collisions. The simulation then starts as one
@@ -332,29 +333,31 @@ export function createBowlSystem({ bus, scene, materials }: BowlSystemDeps): Bow
 
         bowl.momentumStrength = Math.max(0, bowl.momentumStrength - delta * bowlMomentumDecayRate);
         const momentum = bowl.momentumStrength * bowl.momentumStrength;
-        const current = sampleBasinCurrent(
-          { x: bowl.mesh.position.x, y: bowl.mesh.position.z },
-          poolRadius,
-          bowl.radius,
-          elapsed,
-          simulationSettings.flowShape,
-          currentSample,
-        );
-        const baseCurrentResponse = 0.76 + bowl.toneRatio * 0.34 + current.energy * 0.30;
-        const currentResponse = baseCurrentResponse * THREE.MathUtils.lerp(1, 0.28, momentum);
-        const currentBlend = 1 - Math.exp(-delta * currentResponse);
-        currentVelocity.set(current.x, current.y);
-        bowl.velocity.lerp(currentVelocity, currentBlend);
-
-        const wanderScale = (0.0022 + (1 - current.energy) * 0.0018) * delta;
-        bowl.velocity.x += Math.cos(elapsed * 0.17 + bowl.phase) * wanderScale;
-        bowl.velocity.y += Math.sin(elapsed * 0.13 - bowl.phase * 0.7) * wanderScale;
-
-        const targetSpeed = (0.058 + current.energy * 0.046) * THREE.MathUtils.lerp(1, 3.2, momentum);
-        const speedTrim = THREE.MathUtils.lerp(0.035, 0.012, momentum);
-        const speed = bowl.velocity.length();
-        if (speed > targetSpeed) {
-          bowl.velocity.multiplyScalar(THREE.MathUtils.lerp(1, targetSpeed / speed, speedTrim));
+        if (currentEnabled) {
+          const current = sampleBasinCurrent(
+            { x: bowl.mesh.position.x, y: bowl.mesh.position.z },
+            poolRadius,
+            bowl.radius,
+            elapsed,
+            simulationSettings.flowShape,
+            currentSample,
+          );
+          const baseCurrentResponse = 0.76 + bowl.toneRatio * 0.34 + current.energy * 0.30;
+          const currentResponse = baseCurrentResponse * THREE.MathUtils.lerp(1, 0.28, momentum);
+          const currentBlend = 1 - Math.exp(-delta * currentResponse);
+          currentVelocity.set(current.x, current.y);
+          bowl.velocity.lerp(currentVelocity, currentBlend);
+  
+          const wanderScale = (0.0022 + (1 - current.energy) * 0.0018) * delta;
+          bowl.velocity.x += Math.cos(elapsed * 0.17 + bowl.phase) * wanderScale;
+          bowl.velocity.y += Math.sin(elapsed * 0.13 - bowl.phase * 0.7) * wanderScale;
+  
+          const targetSpeed = (0.058 + current.energy * 0.046) * THREE.MathUtils.lerp(1, 3.2, momentum);
+          const speedTrim = THREE.MathUtils.lerp(0.035, 0.012, momentum);
+          const speed = bowl.velocity.length();
+          if (speed > targetSpeed) {
+            bowl.velocity.multiplyScalar(THREE.MathUtils.lerp(1, targetSpeed / speed, speedTrim));
+          }
         }
 
         bowl.velocity.multiplyScalar(Math.pow(0.9984, delta * 60));

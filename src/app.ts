@@ -35,6 +35,8 @@ import { createFrameDiagnostics, frameDiagnosticsEnabled } from "./core/frame-di
 import { createBowlSystem } from "./bowls/system";
 import { createPointerController, type PointerController } from "./input/pointer-controller";
 import type { FlowShape } from "./physics/flow";
+import type { WaterLab } from "./dev/water-lab";
+import type { BowlBody } from "./bowls/types";
 
 // The composition root. Everything with a lifetime is built here from the
 // Stage and torn down in one pass, so a hot reload, a context-loss rebuild, and
@@ -48,6 +50,7 @@ export type CreateAppOptions = {
   // the ?skipIntro dev flag and by a WebGL context-loss rebuild, where sitting
   // the viewer through the reveal a second time would be absurd.
   skipIntro?: boolean;
+  waterLab?: boolean;
 };
 
 // Anything with a dispose() the app owns. Built in dependency order and torn
@@ -63,6 +66,7 @@ const maxWaterSimulationSubsteps = waterSimulationMaxSubsteps;
 
 export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinApp {
   const { camera, clock, renderer, scene } = stage;
+  const waterLabEnabled = import.meta.env.DEV && options.waterLab === true;
   const disposables: Disposable[] = [];
 
   function own<T extends Disposable>(system: T): T {
@@ -82,7 +86,7 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
   const frameDiagnostics = own(createFrameDiagnostics(renderer));
   const lighting = own(createLighting(scene));
   const bowlMaterials = own(createBowlMaterials(waterUniforms));
-  const bowlSystem = own(createBowlSystem({ bus, scene, materials: bowlMaterials }));
+  const bowlSystem = own(createBowlSystem({ bus, scene, materials: bowlMaterials, currentEnabled: !waterLabEnabled }));
 
   const simulation = own(createWaterSimulation({ renderer, uniforms: waterUniforms }));
   const ripples = createRippleField({ uniforms: waterUniforms, simulation });
@@ -93,7 +97,7 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
   const waterSurface = own(createWaterSurface({ scene, uniforms: waterUniforms }));
   const basinFloor = own(createBasinFloor({ scene, uniforms: waterUniforms }));
   const woodFloor = own(createWoodFloor({ scene, renderer }));
-  const flowJets = own(createFlowJets({
+  const flowJets = waterLabEnabled ? null : own(createFlowJets({
     scene,
     uniforms: waterUniforms,
     simulation,
@@ -103,6 +107,8 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
 
   let pointerController: PointerController | null = null;
   let intro: IntroSequence | null = null;
+  let waterLab: WaterLab | null = null;
+  let labFieldsDirty = true;
   let audioEngine: BasinAudio | null = null;
   let audioStartPromise: Promise<void> | null = null;
   let animationFrame = 0;
@@ -163,7 +169,7 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     waterSurface.setRadius(waterSurfaceRadius);
     basinFloor.setRadius(waterSurfaceRadius);
     woodFloor.setPoolRadius(waterSurfaceRadius);
-    flowJets.syncSources();
+    flowJets?.syncSources();
 
     waterUniforms.uSimWorld.value.set(
       -waterSurfaceRadius,
@@ -180,8 +186,10 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     const pixelRatio = Math.min(window.devicePixelRatio, rendererPixelRatioLimit);
     renderer.setPixelRatio(pixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
-    flowJets.setPixelRatio(pixelRatio);
+    flowJets?.setPixelRatio(pixelRatio);
     bowlSystem.keepAllInsideBounds();
+    waterLab?.refreshCamera();
+    labFieldsDirty = true;
   }
 
   // Mobile browsers fire resize continuously while the URL bar slides in and
@@ -214,8 +222,8 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     }
 
     simulationSettings.flowShape = nextShape;
-    flowJets.resetTiming();
-    flowJets.syncSources();
+    flowJets?.resetTiming();
+    flowJets?.syncSources();
     clearWaterState();
   }
 
@@ -234,14 +242,8 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     rebuildBowls();
   }
 
-  function animate(now: DOMHighResTimeStamp) {
-    animationFrame = window.requestAnimationFrame(animate);
-    frameDiagnostics.beginFrame(now);
-
-    const { delta, elapsed, steps } = simulationClock.advance(clock.getDelta());
+  function advanceScene(delta: number, elapsed: number, steps: number, heldBowl: BowlBody | null) {
     waterUniforms.uTime.value = elapsed;
-
-    const heldBowl = pointerController?.getDraggedBowl() ?? null;
     bowlSystem.update(delta, elapsed, heldBowl);
     frameDiagnostics.recordStep("bowls");
     bowlSystem.resolveCollisions(elapsed, heldBowl);
@@ -253,12 +255,11 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     intro?.update(delta);
     bowlSystem.updateInstances();
     frameDiagnostics.recordStep("instances");
-    frameDiagnostics.beginGpuFrame();
     bowlField.update(bowlSystem.bowls);
     frameDiagnostics.recordStep("bowlField");
     interactionField.update();
     frameDiagnostics.recordStep("interactionField");
-    flowJets.emitImpulses(elapsed);
+    flowJets?.emitImpulses(elapsed);
     frameDiagnostics.recordStep("flowImpulses");
     for (let step = 0; step < steps; step += 1) {
       simulation.update(waterSimulationFixedStep);
@@ -266,6 +267,34 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     frameDiagnostics.recordStep("waterSim");
     waveState.update();
     frameDiagnostics.recordStep("waveState");
+  }
+
+  function animate(now: DOMHighResTimeStamp) {
+    animationFrame = window.requestAnimationFrame(animate);
+    frameDiagnostics.beginFrame(now);
+    frameDiagnostics.beginGpuFrame();
+    const rawDelta = clock.getDelta();
+    if (waterLabEnabled) {
+      const steps = waterLab?.consumeSteps(rawDelta) ?? 0;
+      for (let step = 0; step < steps; step += 1) {
+        const heldBowl = waterLab!.beforeStep();
+        advanceScene(waterSimulationFixedStep, waterLab!.elapsed, 1, heldBowl);
+      }
+      if (steps > 0) {
+        labFieldsDirty = false;
+      } else if (labFieldsDirty) {
+        // Repaint a reset pose without advancing damping, collisions or waves.
+        bowlSystem.updateInstances();
+        bowlField.update(bowlSystem.bowls);
+        interactionField.update();
+        waveState.update();
+        labFieldsDirty = false;
+      }
+      waterLab?.updateStatus();
+    } else {
+      const { delta, elapsed, steps } = simulationClock.advance(rawDelta);
+      advanceScene(delta, elapsed, steps, pointerController?.getDraggedBowl() ?? null);
+    }
     renderer.render(scene, camera);
     frameDiagnostics.endGpuFrame();
     frameDiagnostics.recordStep("render");
@@ -366,7 +395,7 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
     }));
   }
 
-  if (!options.skipIntro) {
+  if (!options.skipIntro && !waterLabEnabled) {
     intro = createIntroSequence({
       stage,
       cameraControls,
@@ -387,11 +416,11 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
       own(intro);
     }
   }
-  if (!intro) {
+  if (!intro && !waterLabEnabled) {
     attachPointerController();
   }
 
-  own(createFlowShapeControl({
+  if (!waterLabEnabled) own(createFlowShapeControl({
     getFlowShape: () => simulationSettings.flowShape,
     getBowlCount: () => simulationSettings.bowlCount,
     setFlowShape,
@@ -400,7 +429,26 @@ export function createApp(stage: Stage, options: CreateAppOptions = {}): BasinAp
 
   const fpsCounter = frameDiagnosticsEnabled ? own(createFpsCounter()) : null;
 
-  if (import.meta.env.DEV) {
+  if (waterLabEnabled) {
+    void import("./dev/water-lab").then(({ createWaterLab }) => {
+      if (disposed) return;
+      waterUniforms.uFlowJetCount.value = 0;
+      waterLab = own(createWaterLab({
+        bowlSystem,
+        ripples,
+        bus,
+        stage,
+        cameraControls,
+        resetWater() {
+          clearWaterState();
+          waterUniforms.uTime.value = 0;
+          labFieldsDirty = true;
+        },
+      }));
+    }).catch((error) => console.error("Water lab failed to load.", error));
+  }
+
+  if (import.meta.env.DEV && !waterLabEnabled) {
     void import("./ui/debug-panel").then(({ createDebugPanel }) => {
       if (disposed) {
         return;

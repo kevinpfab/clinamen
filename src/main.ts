@@ -4,6 +4,7 @@ import { createApp, type BasinApp } from "./app";
 
 const unsupportedMessage = "This piece needs a browser with WebGL support enabled.";
 const contextLostMessage = "The graphics context was lost. Reload to bring the basin back.";
+const waterLab = import.meta.env.DEV && new URLSearchParams(window.location.search).has("waterLab");
 
 function showFallback(message: string) {
   const fallback = document.getElementById("basin-fallback");
@@ -52,7 +53,7 @@ function handleContextRestored() {
   try {
     // No second title sequence: the viewer already performed the ritual, and
     // replaying it would read as the piece restarting rather than recovering.
-    app = createApp(stage, { skipIntro: true });
+    app = createApp(stage, { skipIntro: true, waterLab });
     hideFallback();
   } catch (error) {
     console.error("clinamen could not recover its WebGL context.", error);
@@ -70,7 +71,7 @@ try {
 
   const skipIntro = import.meta.env.DEV &&
     new URLSearchParams(window.location.search).has("skipIntro");
-  app = createApp(stage, { skipIntro });
+  app = createApp(stage, { skipIntro: skipIntro || waterLab, waterLab });
 } catch (error) {
   console.error("clinamen could not start.", error);
   showFallback(unsupportedMessage);
