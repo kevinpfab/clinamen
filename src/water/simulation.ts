@@ -338,16 +338,17 @@ export function createWaterSimulation({ renderer, uniforms }: WaterSimulationDep
       // Derive the integration constant from the wave speed in world units so
       // ring propagation matches the analytic ripple layers on every device.
       // courant2 = (c * dt / dx)^2; the shader applies uWaveKick * stepScale to
-      // velocity and 0.34 * stepScale to height, so fold both factors back out.
-      // The clamp keeps the scheme inside the 9-point stencil stability limit
-      // (~0.625 for 0.8/0.2 weights) with margin.
+      // velocity and 0.34 * stepScale to height. The 0.8 cardinal / 0.2 diagonal
+      // stencil approximates 1.2 * dx^2 * laplacian(height), so fold that scale
+      // out as well. Keep its unnormalized coefficient below the stencil's
+      // stability limit (~0.625) with margin.
       const texelWorldSize = uniforms.uSimWorld.value.z / waterSimulationSize;
       const stepScale = THREE.MathUtils.clamp(clampedDelta * 60, 0.35, 1.65);
       const courant2 = Math.min(
         ((waterWaveSpeed * clampedDelta) / Math.max(texelWorldSize, 0.0001)) ** 2,
         0.5,
       );
-      simulationUniforms.uWaveKick.value = courant2 / (0.34 * stepScale * stepScale);
+      simulationUniforms.uWaveKick.value = courant2 / (1.2 * 0.34 * stepScale * stepScale);
       simulationUniforms.uWallReflectance.value = THREE.MathUtils.clamp(
         debugSettings.wallReflectance,
         0,
