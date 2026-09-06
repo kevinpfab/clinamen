@@ -2,32 +2,38 @@
 
 ## Current Implementation Snapshot
 
-- Full-viewport Three.js basin with circular water, basin floor, wood surround, flow jets, porcelain bowl instancing, reflections, and GPU water/interaction fields.
+- Full-viewport Three.js basin with circular water, basin floor, wood surround, flow jets, porcelain bowl instancing, reflections, and a GPU height-field wave solver.
 - Default production density is 100 bowls, with public controls for 10, 50, and 100 bowls plus current pattern selection.
-- Interaction includes camera orbit, wheel zoom, pinch zoom, bowl dragging, and velocity-aware release wakes.
+- Interaction includes camera orbit, wheel zoom, pinch zoom, bowl dragging, and filtered release momentum. Moving hulls drive water pressure through the same path whether dragged, released, or carried by the current.
 - The piece opens on a title sequence: the visitor strikes the hero bowl three times to begin, and the pool emerges from black. `?skipIntro` hands straight to the pointer instead.
 - Audio starts from the first scene gesture — the intro's opening strike doubles as the unlock, so there is no permission button. Frame/GPU diagnostics are development/query-param tooling, not production UI.
 - Runtime ownership flows from one root: `main.ts` builds the Stage, `createApp` builds everything else from it. Every system is a `createX(deps)` factory, and anything holding GPU, DOM, or audio resources exposes `dispose()`, so a hot reload, a WebGL context-loss rebuild, and a page unload all follow the same teardown path.
 - WebGL context loss is caught and recovered on the same Stage; construction failure and unrecoverable loss both surface the `#basin-fallback` message.
 - Shadows are configured but disabled (`enableSceneShadows`): the piece reads as physical through reflection, refraction, and the wave fields instead, and skipping shadow maps buys the frame budget those fields spend.
+- The development-only `?waterLab` route supplies six repeatable scenes, paused initial conditions, exact 60 Hz stepping, and four camera presets. It uses production physics and water rendering with currents and jets disabled. See [Water Visual Testing](WATER_VISUAL_TESTING.md).
 
 ## Bowl and Water Architecture
 
 - `bowls/profile.ts` owns the scalable shell profile, crown height, resting draft, and hull–water intersection. The resting draft is 12% of bowl height. Surface footprints and menisci follow the outer hull at the water plane, and fade in only when the crown emerges. Bowls remain empty vessels; the water surface is masked out inside their hulls.
 - `bowls/pose.ts` composes the common shell/rim transform and its world-space mirror. All flare geometry uses the bowl's local origin, including the intro's finer band. Reflections retain their physical scale and clip at the water plane. Only active field flares are submitted for rendering.
+- Bowl picking first raycasts the rendered porcelain shell, refreshing instance bounds only on a pick. The water-plane footprint remains a forgiving fallback; selection no longer relies on the elevated shell projecting inside that footprint at shallow angles.
 - `input/drag-velocity.ts` estimates held motion from timestamped positions and filters release momentum separately. Both estimates expire when the pointer stops. `waterVelocity` is the motion presented to the water after collision resolution; frozen and emerging bowls publish zero translation.
-- `core/simulation-clock.ts` supplies one bounded timeline for CPU motion, analytic effects, and fixed GPU steps. Slow frames consume a bounded amount of simulation time without letting shader phase run ahead. Physical pool resizing, density changes, and flow changes clear analytic and simulated waves together.
-- `water/bowl-field.ts` rasterizes instanced contact/wake patches with counterclockwise winding. Wake strength and extent scale with world speed. Stationary bowls take a compact contact-only path, and all patches fade to zero at their raster boundaries.
-- `water/wave-state.ts` combines simulation, interaction, and bowl fields into two attachments in one MRT pass, then derives slopes/caustics/foam in a second pass. Surface shading and bowl reflections share those slopes; reflections require two texture reads per vertex instead of reconstructing neighboring gradients.
-- The basin has a shaded inward-facing wall joining its floor to the water plane. Development frame diagnostics accumulate all field and scene passes before resetting their draw counters.
+- `core/simulation-clock.ts` supplies one bounded timeline for CPU motion, shader phase, and fixed GPU steps. Slow frames consume a bounded amount of simulation time without letting shader phase run ahead. Physical pool resizing, density changes, and flow changes reset the water fields together.
+- `water/ripples.ts` injects one local, volume-balanced collision impulse into `water/simulation.ts`. The GPU solver owns propagation and boundary response. Historical analytic collision rings and the separate drag-only wake API have been removed, so an event does not launch overlapping simulated and analytic wave packets.
+- `water/bowl-field.ts` rasterizes compact instanced hull-contact patches with counterclockwise winding. Each patch carries meniscus height, signed bow/stern pressure, and the dry footprint. Pressure follows world speed for every moving bowl; a stopped bowl retains its contact without continuing to force a wake. Detached waves travel through the solver rather than long trail-shaped splats. Patch edges fade to zero before their raster boundaries.
+- `water/wave-state.ts` combines simulation, interaction, and bowl fields into two attachments in one MRT pass, then derives slopes/caustics/foam in a second pass. Normals depend on signed displacement rather than positive energy envelopes. Surface shading and bowl reflections share the derived slopes; reflections use two texture reads per vertex instead of reconstructing neighboring gradients.
+- Water shading reflects a stationary procedural studio environment, allowing moving normals to reveal subdued ripples through changing reflections and refraction. Ordinary waves do not need an independently painted white ring to remain visible. Basin-floor footprints are softened, and wave focus modulates the projected caustic pattern rather than duplicating a bright surface crest on the floor.
+- The basin has a shaded inward-facing wall joining its floor to the water plane. Development frame diagnostics accumulate all field and scene passes before resetting their draw counters. Fewer sources, compact patches, and shared samples are architectural savings; they are not a substitute for measured frame timing.
 
 These changes preserve the lightweight CPU collision model and GPU wave grid. The water surface remains geometrically flat, and reflections remain distorted mirrored bowl geometry. The system does not perform fluid–rigid-body coupling or GPU-to-CPU height readback.
 
 ### Validation and Visual Review
 
-The coding validation is `bun run lint && bun test && bun run build`. Regression tests cover hull contact and emergence, shared/mirrored poses, wide rim geometry, drag stopping/release, wave resets, and timeline consistency across frame rates. Shader compilation, appearance, interaction feel, and actual GPU timing require the developer's runtime review.
+The coding validation is `bun run lint && bun test && bun run build`. The current suite contains 87 tests, including hull contact and emergence, shared/mirrored poses, wide rim geometry, drag stopping/release, collision impulse behavior, wave resets, and timeline consistency across frame rates. These checks do not establish shader compilation, appearance, interaction feel, or GPU timing.
 
-The most useful visual review cases are the three intro strikes and bowl emergence, gentle drift at 100 bowls, a fast drag followed by a stationary hold and release, shallow camera orbits, mobile rim pulses, and changing orientation/density/current patterns. Compare complete-frame GPU timing: restoring formerly culled bowl-field patches enables real work, so pass and texture-read reductions alone do not establish a measured frame-rate improvement.
+Browser and visual checks were explicitly authorized for this iteration. The still, isolated-ripple, head-on, glancing, drag-and-stop, and crowd scenes were inspected in Chrome, including Close, Low, Overview, and Top views. [Water Visual Testing](WATER_VISUAL_TESTING.md) records repeatable scene/time recipes, controls, and remaining limitations. The priority is subdued, plausible ripples during bowl movement and collision: one propagating disturbance, no lingering source glow, and no renewed forcing after a drag stops.
+
+The lab isolates water behavior; production review must still cover the three intro strikes and bowl emergence, gentle drift at 100 bowls with currents and jets, an actual drag–hold–release gesture, shallow camera orbits, mobile rim pulses, and changing orientation/density/current patterns. Compare complete-frame GPU timing during playback at matched settings. Paused lab renders and batches of manual steps do not represent normal frame cost. Mobile-device performance has not been validated, and no measured performance improvement is claimed here.
 
 ## Vision
 
