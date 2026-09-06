@@ -71,12 +71,14 @@ const basinFloorFragmentShader = `
       return texture2D(uWaveDerivedMap, clamp(simulationUv(p), 0.001, 0.999));
     }
 
-    vec2 floorWaterWarp(vec2 p, out float waveHeight, out float waveSlope, out float waveEnergy) {
+    vec2 floorWaterWarp(vec2 p, out float waveSlope, out float waveEnergy, out float waveCaustic) {
       vec4 waveState = sampledWaveState(p);
-      vec2 combinedSlope = sampledWaveDerived(p).xy;
-      waveHeight = waveState.x;
+      vec4 waveDerived = sampledWaveDerived(p);
+      vec2 combinedSlope = waveDerived.xy;
+      float waveHeight = waveState.x;
       waveSlope = waveState.y;
       waveEnergy = waveState.z;
+      waveCaustic = clamp(waveDerived.z, 0.0, 1.0);
       float breakup = clamp(abs(waveHeight) * 1.45 + waveSlope * 0.12 + waveEnergy * 0.30, 0.0, 1.0);
       vec2 drift = vec2(
         valueNoise(p * 2.95 + vec2(uTime * 0.22, waveHeight * 5.4)),
@@ -91,10 +93,17 @@ const basinFloorFragmentShader = `
         + fine * (0.003 + breakup * 0.023);
     }
 
-    float floorBowlShadow(vec2 p, vec2 waterWarp, float waveHeight, float waveSlope, float waveEnergy) {
-      float footprint = sampledWaveDetail(p + waterWarp * 0.62).z;
-      float breakup = clamp(abs(waveHeight) * 0.75 + waveSlope * 0.080 + waveEnergy * 0.18, 0.0, 0.62);
-      return clamp(footprint * (0.42 + breakup), 0.0, 0.72);
+    float floorBowlShadow(vec2 p, vec2 waterWarp) {
+      // The floor is well below contact: a crisp copy of the waterline reads
+      // as a detached disk. Keep only a broad, faint occlusion cue here.
+      vec2 q = p + waterWarp * 0.28;
+      float spread = 0.13;
+      float footprint = clamp(sampledWaveDetail(q).z, 0.0, 1.0);
+      footprint += clamp(sampledWaveDetail(q + vec2(spread, 0.0)).z, 0.0, 1.0);
+      footprint += clamp(sampledWaveDetail(q - vec2(spread, 0.0)).z, 0.0, 1.0);
+      footprint += clamp(sampledWaveDetail(q + vec2(0.0, spread)).z, 0.0, 1.0);
+      footprint += clamp(sampledWaveDetail(q - vec2(0.0, spread)).z, 0.0, 1.0);
+      return footprint * (0.14 / 5.0);
     }
 
     float floorCaustics(vec2 p, float waveEnergy, float waveSlope) {
@@ -108,23 +117,23 @@ const basinFloorFragmentShader = `
       float c = sin(dot(q, vec2(-0.55, 0.96)) * 4.20 + uTime * 0.07);
       float strands = max(0.0, (a + b + c) * 0.333);
       float concentration = mix(5.8, 3.9, clamp(waveEnergy * 0.50 + waveSlope * 0.10, 0.0, 1.0));
-      return pow(strands, concentration) * (0.030 + waveEnergy * 0.024 + waveSlope * 0.006);
+      return pow(strands, concentration)
+        * (0.018 + clamp(waveEnergy, 0.0, 1.2) * 0.010 + clamp(waveSlope, 0.0, 1.0) * 0.003);
     }
 
     void main() {
       vec2 p = vWorldPosition.xz;
-      float waveHeight = 0.0;
       float waveSlope = 0.0;
       float waveEnergy = 0.0;
-      vec2 warp = floorWaterWarp(p, waveHeight, waveSlope, waveEnergy);
-      float shadow = floorBowlShadow(p, warp, waveHeight, waveSlope, waveEnergy);
+      float waveCaustic = 0.0;
+      vec2 warp = floorWaterWarp(p, waveSlope, waveEnergy, waveCaustic);
+      float shadow = floorBowlShadow(p, warp);
       float depth = basinDepthField(p);
       float edge = basinEdgeField(p);
       float caustics = floorCaustics(p + warp * 1.35, waveEnergy, waveSlope);
-      // Light focused by the actual wave field: expanding ripple rings project
-      // matching caustic rings that travel with the wavefront, unlike the
-      // procedural strands which only brighten with ambient wave energy.
-      float waveCaustic = sampledWaveDerived(p + warp * 0.85).z;
+      // Focus modulates the broken caustic pattern instead of drawing another
+      // full ripple ring on the lower plane, offset by perspective.
+      caustics *= 1.0 + waveCaustic * 0.32;
       float surfaceVariation = valueNoise(p * 0.54 + vec2(uTime * 0.012, -uTime * 0.010)) - 0.5;
 
       vec3 deepBlue = vec3(0.000, 0.360, 0.500);
@@ -133,11 +142,10 @@ const basinFloorFragmentShader = `
       vec3 color = mix(deepBlue, basinBlue, 0.78 + depth * 0.16 + surfaceVariation * 0.022);
       color = mix(color, cyanBlue, 0.34 + depth * 0.16);
       color = mix(color, deepBlue * 0.96, edge * 0.08);
-      color += vec3(0.86, 1.00, 0.96) * caustics * (1.08 + depth * 0.48);
-      color += vec3(0.88, 1.00, 0.97) * waveCaustic * (0.30 + depth * 0.16);
-      color += vec3(0.46, 0.96, 0.96) * clamp(waveEnergy * 0.046, 0.0, 0.105);
+      color += vec3(0.86, 1.00, 0.96) * caustics * (0.70 + depth * 0.25);
+      color += vec3(0.46, 0.96, 0.96) * clamp(waveEnergy * 0.015, 0.0, 0.030);
       color += vec3(0.000, 0.060, 0.070) * (0.72 + depth * 0.28);
-      color = mix(color, vec3(0.000, 0.070, 0.105), shadow);
+      color = mix(color, vec3(0.000, 0.220, 0.300), shadow);
       color *= 1.0 - edge * 0.08;
 
       gl_FragColor = vec4(color * uSceneDim, 1.0);

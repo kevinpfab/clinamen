@@ -2,9 +2,7 @@ import * as THREE from "three";
 import { circularPoolSegments } from "../config";
 import type { SharedWaterUniforms } from "./uniforms";
 import {
-  basinConstantsChunk,
   simulationUvChunk,
-  valueNoiseChunk,
 } from "./shader-chunks";
 
 // The brilliant-blue water surface: a circular plane driven by a custom shader
@@ -33,239 +31,56 @@ const waterVertexShader = `
 
 const waterFragmentShader = `
     precision highp float;
-
     uniform float uTime;
     uniform float uSceneDim;
-    uniform sampler2D uWaveStateMap;
     uniform sampler2D uWaveDetailMap;
     uniform sampler2D uWaveDerivedMap;
-    uniform sampler2D uNoiseMap;
     uniform vec4 uSimWorld;
     uniform vec4 uPoolData;
-    varying vec2 vUv;
     varying vec3 vWorldPosition;
-
-    ${basinConstantsChunk}
-    ${valueNoiseChunk}
-
-    float waveLayer(vec2 p, vec2 direction, float speed, float scale, float ratio, float weight) {
-      vec2 tangent = vec2(-direction.y, direction.x);
-      // Slow spatial phase drift decouples the sin/cos pair so the layer
-      // stops reading as an egg-crate lattice.
-      float drift = valueNoise(p * 0.052 + direction * 3.7) - 0.5;
-      float a = sin((dot(p, direction) * scale + uTime * speed + drift * 0.22) * BASIN_TAU);
-      float b = cos((dot(p, tangent) * scale * ratio - uTime * speed * 0.62 - drift * 0.30) * BASIN_TAU);
-      return (a + b) * 0.5 * weight;
-    }
-
-    float baseSurface(vec2 p) {
-      vec2 broadWarp = vec2(
-        valueNoise(p * 0.145 + vec2(uTime * 0.012, 4.7)),
-        valueNoise(p * 0.160 + vec2(-3.1, uTime * 0.010))
-      ) - 0.5;
-      vec2 fineWarp = vec2(
-        valueNoise(p * 0.420 + vec2(8.2, -uTime * 0.022)),
-        valueNoise(p * 0.390 + vec2(uTime * 0.018, -6.4))
-      ) - 0.5;
-      vec2 q = p + broadWarp * 0.86 + fineWarp * 0.14;
-      float surface = 0.0;
-      surface += waveLayer(q, normalize(vec2(1.0, 0.34)), 0.021, 0.058, 0.67, 0.34);
-      surface += waveLayer(q + vec2(2.4, -1.8), normalize(vec2(-0.42, 1.0)), 0.034, 0.108, 0.79, 0.22);
-      surface += waveLayer(q + vec2(-0.7, 2.1), normalize(vec2(0.80, -0.60)), 0.048, 0.174, 0.58, 0.11);
-      surface += (valueNoise(q * 0.58 + vec2(uTime * 0.014, -uTime * 0.018)) - 0.5) * 0.040;
-      return surface;
-    }
 
     ${simulationUvChunk}
 
-    vec4 sampledWaveState(vec2 p) {
-      return texture2D(uWaveStateMap, clamp(simulationUv(p), 0.001, 0.999));
-    }
-
-    vec4 sampledWaveDetail(vec2 p) {
-      return texture2D(uWaveDetailMap, clamp(simulationUv(p), 0.001, 0.999));
-    }
-
-    vec4 sampledWaveDerived(vec2 p) {
-      return texture2D(uWaveDerivedMap, clamp(simulationUv(p), 0.001, 0.999));
-    }
-
-    float basinDepthField(vec2 p) {
-      float radius = max(uPoolData.z, 0.001);
-      float normalizedRadius = length(p - uPoolData.xy) / radius;
-      return 1.0 - smoothstep(0.54, 1.02, normalizedRadius);
-    }
-
-    float basinEdgeField(vec2 p) {
-      float radius = max(uPoolData.z, 0.001);
-      float normalizedRadius = length(p - uPoolData.xy) / radius;
-      return smoothstep(0.74, 1.0, normalizedRadius);
-    }
-
-    vec2 shimmerSlope(vec2 p) {
-      vec2 slope = vec2(0.0);
-      vec2 d1 = normalize(vec2(0.92, 0.38));
-      vec2 d2 = normalize(vec2(-0.42, 1.00));
-      vec2 d3 = normalize(vec2(0.18, -0.98));
-      float q1 = dot(p, d1) * 8.2 + uTime * 1.18;
-      float q2 = dot(p + vec2(1.8, -0.7), d2) * 13.6 - uTime * 1.56;
-      float q3 = dot(p + vec2(-0.4, 2.1), d3) * 21.5 + uTime * 2.18;
-      float cell = valueNoise(p * 2.6 + vec2(uTime * 0.20, -uTime * 0.16));
-      // Slow spatial fades keep each glint family patchy instead of letting
-      // its parallel bands stripe the whole pool; means stay near 1.0 so the
-      // total shimmer energy is unchanged.
-      float fade1 = 0.55 + valueNoise(p * 0.30 + vec2(uTime * 0.017, -2.6)) * 0.90;
-      float fade2 = 0.55 + valueNoise(p * 0.26 + vec2(-4.1, uTime * 0.014)) * 0.90;
-      float fade3 = 0.55 + valueNoise(p * 0.34 + vec2(2.2, 5.0 - uTime * 0.019)) * 0.90;
-      slope += d1 * cos(q1 + cell * 1.90) * 0.050 * fade1;
-      slope += d2 * cos(q2 + cell * 1.45) * 0.033 * fade2;
-      slope += d3 * cos(q3 - cell * 2.10) * 0.020 * fade3;
-      slope += vec2(
-        valueNoise(p * 6.4 + vec2(uTime * 0.54, 2.7)),
-        valueNoise(p * 6.1 + vec2(-3.2, -uTime * 0.48))
-      ) * 0.018 - vec2(0.009);
-      return slope;
-    }
-
-    vec2 waterWarp(vec2 p, vec2 slope, float waveHeight, float waveSlope, float waveEnergy) {
-      float breakup = clamp(abs(waveHeight) * 1.45 + waveSlope * 0.11 + waveEnergy * 0.26, 0.0, 1.0);
-      vec2 drift = vec2(
-        valueNoise(p * 2.95 + vec2(uTime * 0.22, waveHeight * 5.4)),
-        valueNoise(p * 2.70 + vec2(-uTime * 0.18, waveHeight * 4.6))
-      ) - 0.5;
-      vec2 fine = vec2(
-        sin(dot(p, vec2(0.83, 0.56)) * 7.8 + uTime * 0.86 + waveHeight * 20.0),
-        cos(dot(p, vec2(-0.61, 0.79)) * 6.9 - uTime * 0.72 - waveHeight * 18.0)
-      );
-      return slope * (0.18 + breakup * 0.16 + waveEnergy * 0.032)
-        + drift * (0.014 + breakup * 0.064)
-        + fine * (0.0025 + breakup * 0.018);
-    }
-
-    float underwaterShadowField(vec2 p, vec2 slope, float waveHeight, float waveSlope, float waveEnergy) {
-      vec2 warp = waterWarp(p, slope, waveHeight, waveSlope, waveEnergy);
-      float footprint = sampledWaveDetail(p + warp * 0.42).z;
-      float breakup = clamp(abs(waveHeight) * 0.65 + waveSlope * 0.070 + waveEnergy * 0.16, 0.0, 0.50);
-      return clamp(footprint * (0.18 + breakup), 0.0, 0.34);
-    }
-
-    float subtleCaustics(vec2 p, float waveEnergy, float slopeAmount) {
-      vec2 q = p * 0.82;
-      q += vec2(
-        valueNoise(p * 0.22 + vec2(uTime * 0.018, 2.0)),
-        valueNoise(p * 0.20 + vec2(-4.0, -uTime * 0.015))
-      ) * (0.64 + clamp(waveEnergy, 0.0, 1.0) * 0.22);
-      float a = sin(q.x * 3.10 + sin(q.y * 2.00) * 0.44 + uTime * 0.08);
-      float b = sin(dot(q, vec2(0.72, 0.86)) * 3.70 - uTime * 0.10);
-      float c = sin(dot(q, vec2(-0.55, 0.96)) * 4.20 + uTime * 0.07);
-      float strands = max(0.0, (a + b + c) * 0.333);
-      float concentration = mix(5.4, 3.8, clamp(waveEnergy * 0.52 + slopeAmount * 0.34, 0.0, 1.0));
-      return pow(strands, concentration) * (0.012 + waveEnergy * 0.018 + slopeAmount * 0.010);
+    // An inexpensive, stationary studio environment. A broad overhead source
+    // gives moving slopes something coherent to reflect. Unlike painted crest
+    // highlights, its bright and dark sides change with the viewing direction.
+    vec3 reflectedRoom(vec3 ray) {
+      vec3 room = mix(vec3(0.19, 0.25, 0.28), vec3(0.48, 0.57, 0.60),
+        smoothstep(0.0, 0.8, ray.y));
+      float softbox = pow(max(dot(ray, normalize(vec3(-0.18, 0.60, -0.78))), 0.0), 90.0);
+      float fill = pow(max(dot(ray, normalize(vec3(0.82, 0.48, 0.30))), 0.0), 10.0);
+      return room + vec3(1.0, 0.96, 0.87) * softbox * 5.0
+        + vec3(0.66, 0.78, 0.86) * fill * 0.55;
     }
 
     void main() {
       vec2 p = vWorldPosition.xz;
-      vec4 waveState = sampledWaveState(p);
-      vec4 waveDetail = sampledWaveDetail(p);
-      float bowlOcclusion = clamp(waveDetail.z, 0.0, 1.0);
-      float surface = baseSurface(p);
-      float simulationEnergy = waveDetail.w;
-      float basinDepth = basinDepthField(p);
-      float basinEdge = basinEdgeField(p);
-      float waveHeight = waveState.x;
-      float waveSlope = waveState.y;
-      float waveEnergy = waveState.z;
-      float contactBase = waveState.w;
-      float meniscus = clamp(waveDetail.y * (0.048 + waveEnergy * 0.006), 0.0, 0.18);
-      float contactAccent = contactBase + meniscus;
-      vec4 waveDerived = sampledWaveDerived(p);
-      float foam = waveDerived.w;
-      vec2 slope = waveDerived.xy + shimmerSlope(p);
-      float slopeAmount = length(slope);
-      vec3 normal = normalize(vec3(slope.x, 1.0, slope.y));
-      vec3 lightDirection = normalize(vec3(-0.12, 0.99, 0.08));
+      vec2 uv = clamp(simulationUv(p), 0.001, 0.999);
+      vec4 detail = texture2D(uWaveDetailMap, uv);
+      vec4 derived = texture2D(uWaveDerivedMap, uv);
+      // Barely perceptible ambient motion; the interaction field carries the
+      // readable waves. No high-frequency noise that swims over a still bowl.
+      vec2 ambient = vec2(0.003 * cos(dot(p, vec2(1.7, 0.8)) - uTime * 0.7),
+                          0.002 * cos(dot(p, vec2(-0.6, 2.1)) - uTime * 0.9));
+      vec3 normal = normalize(vec3(derived.x + ambient.x, 1.0, derived.y + ambient.y));
       vec3 viewDirection = normalize(cameraPosition - vWorldPosition);
-      vec3 halfDirection = normalize(lightDirection + viewDirection);
-      float directionalLight = clamp(dot(normal, lightDirection), 0.0, 1.0);
-      float specular = pow(clamp(dot(normal, halfDirection), 0.0, 1.0), 118.0) * 0.44;
-      float broadSpecular = pow(clamp(dot(normal, halfDirection), 0.0, 1.0), 22.0) * 0.045;
-      float fresnel = pow(1.0 - clamp(dot(normal, viewDirection), 0.0, 1.0), 3.0);
-      // A two-color procedural sky sampled by the reflected view ray gives the
-      // fresnel term hue variation instead of a flat white glaze.
-      vec3 reflected = reflect(-viewDirection, normal);
-      vec3 skyZenith = vec3(0.42, 0.78, 0.92);
-      vec3 skyHorizon = vec3(0.86, 0.96, 0.98);
-      vec3 skyColor = mix(skyHorizon, skyZenith, smoothstep(0.0, 0.72, reflected.y));
-      float causticLight = subtleCaustics(p + normal.xz * (0.20 + waveEnergy * 0.045), waveEnergy, slopeAmount);
-      vec3 deepBlue = vec3(0.000, 0.180, 0.300);
-      vec3 tealBlue = vec3(0.000, 0.440, 0.590);
-      vec3 cyanBlue = vec3(0.000, 0.561, 0.776);
-      vec3 highlight = vec3(0.700, 0.940, 0.900);
-      float positiveCrest = max(waveHeight, 0.0);
-      float negativeTrough = max(-waveHeight, 0.0);
-      float whiteCrest = smoothstep(0.034, 0.180, positiveCrest) * clamp(positiveCrest * 0.92, 0.0, 0.20);
-      whiteCrest += smoothstep(0.120, 0.640, waveSlope) * clamp(waveEnergy * 0.046, 0.0, 0.11);
-      whiteCrest += smoothstep(0.24, 1.00, simulationEnergy + contactBase * 0.20) * clamp(slopeAmount * 0.020, 0.0, 0.055);
-      whiteCrest += clamp(contactAccent * 0.21, 0.0, 0.12);
-      whiteCrest += clamp(contactBase * 0.010 + waveEnergy * 0.030, 0.0, 0.10);
-      whiteCrest += clamp(
-        foam * (0.11 + valueNoise(p * 4.2 + vec2(uTime * 0.11, -uTime * 0.09)) * 0.10),
-        0.0,
-        0.15
-      );
-      float shimmer = surface * 0.22 + waveHeight * 0.48;
-      // Brighten the far side of the pool relative to the camera so the
-      // gradient follows the view as it orbits (it was fixed to world +z).
-      vec2 cameraXZ = cameraPosition.xz;
-      float cameraXZLength = length(cameraXZ);
-      vec2 awayAxis = cameraXZLength > 0.001 ? -cameraXZ / cameraXZLength : vec2(0.0, 1.0);
-      float distanceFade = smoothstep(-5.0, 4.8, dot(p, awayAxis));
-      float glancing = smoothstep(0.18, 0.84, fresnel);
-      // A stretched drifting noise patch instead of the old straight sine
-      // band, which swept the pool with a perfectly periodic stripe.
-      float lightBand = smoothstep(
-        0.58,
-        0.90,
-        valueNoise(vec2(p.x * 0.085 + uTime * 0.011, p.y * 0.032 - uTime * 0.007))
-      );
-      vec3 color = mix(deepBlue, tealBlue, 0.62 + basinDepth * 0.18 + shimmer * 0.10 + distanceFade * 0.08);
-      color = mix(color, cyanBlue, 0.19 + directionalLight * 0.08 + glancing * 0.15 + basinDepth * 0.04);
-      color = mix(color, deepBlue * 0.84, basinEdge * 0.16);
-      color += highlight * (
-        0.012
-        + lightBand * 0.008
-        + specular * (0.78 + waveEnergy * 0.08)
-        + broadSpecular
-        + causticLight * (0.82 + basinDepth * 0.52)
-        + slopeAmount * 0.016
-      );
-      color += skyColor * fresnel * 0.085;
-      color += highlight * clamp(contactBase * 0.014, 0.0, 0.10);
-      color += vec3(0.76, 1.0, 0.96) * clamp(waveEnergy * 0.026, 0.0, 0.14);
-      color += vec3(0.72, 0.98, 0.94) * meniscus * 0.25;
-      color -= deepBlue * clamp(negativeTrough * 0.24, 0.0, 0.20);
-      color -= deepBlue * basinEdge * clamp(0.040 + waveEnergy * 0.018, 0.0, 0.12);
-      color *= 1.0 + surface * 0.018;
-      float underwaterShadow = underwaterShadowField(p, slope, waveHeight, waveSlope, waveEnergy);
-      vec3 shadowColor = mix(deepBlue * 0.78, vec3(0.000, 0.160, 0.220), 0.48);
-      color = mix(color, shadowColor, underwaterShadow * 0.28);
-      vec3 crestColor = vec3(0.900, 0.990, 0.985);
-      float crestMix = clamp(whiteCrest, 0.0, 0.30);
-      color = mix(color, crestColor, crestMix);
-      color += crestColor * clamp(whiteCrest * 0.09 + causticLight * 0.14 + meniscus * 0.035, 0.0, 0.12);
-
-      float waterAlpha = clamp(
-        0.70
-          + basinDepth * 0.035
-          + basinEdge * 0.040
-          + fresnel * 0.18
-          + waveSlope * 0.018
-          + underwaterShadow * 0.015,
-        0.66,
-        0.95
-      );
-      waterAlpha *= 1.0 - bowlOcclusion;
-      gl_FragColor = vec4(color * uSceneDim, waterAlpha);
+      float nv = clamp(dot(normal, viewDirection), 0.0, 1.0);
+      float fresnel = 0.020 + 0.980 * pow(1.0 - nv, 5.0);
+      vec3 reflected = reflectedRoom(reflect(-viewDirection, normal));
+      float radial = length(p - uPoolData.xy) / max(uPoolData.z, 0.001);
+      float edge = smoothstep(0.66, 1.0, radial);
+      vec3 transmission = mix(vec3(0.035, 0.385, 0.515), vec3(0.025, 0.285, 0.365), edge * 0.40);
+      // Premultiplied optical balance expressed in straight-alpha form:
+      // reflection increases as transmission decreases at grazing angles.
+      float absorption = 0.66;
+      float alpha = absorption + fresnel * (1.0 - absorption);
+      vec3 color = (transmission * absorption * (1.0 - fresnel) + reflected * fresnel) / alpha;
+      // Only genuinely agitated water gets a little foam; ordinary ripples
+      // remain transparent and are described by their normals.
+      float foam = smoothstep(0.22, 0.75, derived.w) * 0.12;
+      color = mix(color, vec3(0.85, 0.91, 0.90), foam);
+      alpha *= 1.0 - clamp(detail.z, 0.0, 1.0);
+      gl_FragColor = vec4(color * uSceneDim, alpha);
     }
 `;
 

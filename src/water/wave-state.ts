@@ -75,16 +75,16 @@ const combineFragmentShader = `
     float waveSlope = abs(simulated) * 1.90
       + simulationEnergy * 0.18
       + interaction.y
-      + bowl.y * 0.28;
+      + abs(bowl.y) * 0.28;
     float waveEnergy = simulationEnergy * 0.78
       + abs(simulated) * 0.90
       + interaction.z
-      + bowl.y * 0.72;
+      + abs(bowl.y) * 0.72;
+    // Normals depend only on signed displacement. Energy is not height:
+    // adding it here creates an extra ridge at both crests and troughs.
     float normalHeight = sim.r * 0.360
-      + sim.b * 0.007
       + interaction.x * 0.150
-      + interaction.z * 0.004
-      + bowl.x * 0.056;
+      + bowl.x * 0.180;
     waveState = vec4(waveHeight, waveSlope, waveEnergy, interaction.w);
     waveDetail = vec4(normalHeight, bowl.z, bowl.a, sim.b);
   }
