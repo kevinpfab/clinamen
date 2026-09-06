@@ -1,9 +1,9 @@
 import * as THREE from "three";
-import { circularPoolSegments } from "../config";
+import { circularPoolSegments, waterPlaneY } from "../config";
 import type { SharedWaterUniforms } from "../water/uniforms";
 import { simulationUvChunk, valueNoiseChunk } from "../water/shader-chunks";
 
-// The shaded basin floor seen through the translucent water.
+// The shaded basin floor and inner wall seen through the translucent water.
 export type BasinFloor = {
   setRadius: (radius: number) => void;
   dispose: () => void;
@@ -158,15 +158,38 @@ export function createBasinFloor({ scene, uniforms }: BasinFloorDeps): BasinFloo
   mesh.receiveShadow = false;
   scene.add(mesh);
 
+  // The water and floor have equal radii but different heights. Without a
+  // wall, oblique views through the far rim miss the floor and reveal the
+  // scene background. Match the disks' segments and reuse their shading so
+  // this closes the basin with one static strip, including during the intro.
+  const wallMaterial = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader: basinFloorVertexShader,
+    fragmentShader: basinFloorFragmentShader,
+    side: THREE.BackSide,
+  });
+  const wall = new THREE.Mesh(
+    new THREE.CylinderGeometry(
+      1, 1, waterPlaneY - basinFloorY, circularPoolSegments, 1, true,
+    ),
+    wallMaterial,
+  );
+  wall.name = "Basin inner wall";
+  wall.position.y = (waterPlaneY + basinFloorY) / 2;
+  scene.add(wall);
+
   return {
     setRadius(radius: number) {
       mesh.scale.set(radius, radius, 1);
+      wall.scale.set(radius, 1, radius);
     },
 
     dispose() {
-      scene.remove(mesh);
+      scene.remove(mesh, wall);
       mesh.geometry.dispose();
       material.dispose();
+      wall.geometry.dispose();
+      wallMaterial.dispose();
     },
   };
 }
