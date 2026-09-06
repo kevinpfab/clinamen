@@ -3,15 +3,11 @@ import {
   bowlImpactColorIntensity,
   bowlImpactInwardReachScale,
   bowlImpactRimInnerRadius,
-  maxFlowJets,
-  maxRipples,
-  waterSimulationSize,
   waterPlaneY,
 } from "../config";
 import type { SharedWaterUniforms } from "../water/uniforms";
 import { porcelainSurface } from "./porcelain";
 import {
-  basinMaskChunk,
   gaussianChunk,
   simulationUvChunk,
 } from "../water/shader-chunks";
@@ -120,190 +116,16 @@ totalEmissiveRadiance += bowlPulseColor * bowlPulseEnvelope * (${bowlPulseEmissi
 
 const reflectionVertexShader = `
     uniform float uTime;
-    uniform sampler2D uHeightMap;
-    uniform sampler2D uInteractionFieldMap;
+    uniform sampler2D uWaveStateMap;
+    uniform sampler2D uWaveDerivedMap;
     uniform vec4 uSimWorld;
-    uniform vec4 uPoolData;
-    uniform float uWaveSpeed;
-    uniform vec4 uRippleCenters[${maxRipples}];
-    uniform vec4 uRippleData[${maxRipples}];
-    uniform int uRippleCount;
-    uniform vec4 uFlowJetData[${maxFlowJets}];
-    uniform vec4 uFlowJetParams[${maxFlowJets}];
-    uniform int uFlowJetCount;
 
     varying vec3 vWorldPosition;
     varying float vReflectionFade;
     varying float vWaterMotion;
     varying vec2 vRefractionOffset;
 
-    ${gaussianChunk}
-    ${basinMaskChunk}
     ${simulationUvChunk}
-
-    vec3 simulatedStateAtUv(vec2 uv) {
-      vec2 safeUv = clamp(uv, 0.001, 0.999);
-      vec2 p = uSimWorld.xy + safeUv * uSimWorld.zw;
-      float mask = basinMask(p);
-      return texture2D(uHeightMap, safeUv).rgb * mask;
-    }
-
-    vec2 simulatedSlope(vec2 p, out float height, out float energy) {
-      vec2 uv = simulationUv(p);
-      vec2 texel = vec2(${1 / waterSimulationSize});
-      vec2 worldTexel = max(uSimWorld.zw * texel, vec2(0.001));
-      vec3 center = simulatedStateAtUv(uv);
-      float leftHeight = simulatedStateAtUv(uv - vec2(texel.x, 0.0)).r;
-      float rightHeight = simulatedStateAtUv(uv + vec2(texel.x, 0.0)).r;
-      float downHeight = simulatedStateAtUv(uv - vec2(0.0, texel.y)).r;
-      float upHeight = simulatedStateAtUv(uv + vec2(0.0, texel.y)).r;
-      height = center.r;
-      energy = center.b;
-      return vec2(leftHeight - rightHeight, downHeight - upHeight) / (worldTexel * 2.0);
-    }
-
-    vec4 interactionFieldAt(vec2 p) {
-      return texture2D(uInteractionFieldMap, clamp(simulationUv(p), 0.001, 0.999));
-    }
-
-    vec2 interactionFieldRefraction(vec2 p, out float interactionEnergy) {
-      float sampleStep = 0.050;
-      vec4 center = interactionFieldAt(p);
-      vec2 slope = vec2(
-        interactionFieldAt(p + vec2(sampleStep, 0.0)).x - interactionFieldAt(p - vec2(sampleStep, 0.0)).x,
-        interactionFieldAt(p + vec2(0.0, sampleStep)).x - interactionFieldAt(p - vec2(0.0, sampleStep)).x
-      ) / max(sampleStep * 2.0, 0.001);
-      interactionEnergy = center.z + abs(center.x) * 0.72 + center.w * 0.18;
-      return -slope * (0.026 + clamp(interactionEnergy, 0.0, 1.0) * 0.030);
-    }
-
-    // The reflection's own reading of the ripple field. It cannot sample the
-    // interaction field's height at vertex rate with enough precision to
-    // recover a usable gradient, so it re-derives the wave envelopes directly
-    // from the ripple uniforms — the same envelopes water/interaction-field.ts
-    // integrates, at the same wave speed, fade, and widths, so a reflection
-    // bends over the ring that is actually there.
-    //
-    // What it deliberately leaves out, because a reflected bowl only needs the
-    // dominant bend and this runs per vertex: the recovery crest and tail of
-    // the radial packet, the directional spread of the young front, the
-    // compression pulse, and the valueNoise term that gives the water's rings
-    // their organic edge (no noise source in this shader). Amplitudes below are
-    // the reflection's own — they scale a world-space offset, not a height.
-    vec2 explicitRippleRefraction(vec2 p, out float rippleEnergy) {
-      vec2 refraction = vec2(0.0);
-      rippleEnergy = 0.0;
-
-      for (int i = 0; i < ${maxRipples}; i++) {
-        if (i >= uRippleCount) {
-          break;
-        }
-
-        vec2 center = uRippleCenters[i].xy;
-        float age = uRippleData[i].x;
-        float lifetime = max(uRippleData[i].y, 0.001);
-        float strength = uRippleData[i].z;
-        float shape = uRippleData[i].w;
-        vec2 direction = uRippleCenters[i].zw;
-        float directionLength = length(direction);
-        direction = directionLength > 0.001 ? direction / directionLength : vec2(1.0, 0.0);
-        vec2 tangent = vec2(-direction.y, direction.x);
-        vec2 offset = p - center;
-        float progress = clamp(age / lifetime, 0.0, 1.0);
-        float ageGate = smoothstep(0.0, 0.055, age);
-
-        if (shape > 0.5) {
-          float motion = clamp(directionLength - 1.0, 0.0, 1.0);
-          float behind = max(-dot(offset, direction), 0.0);
-          float across = dot(offset, tangent);
-          float fade = pow(1.0 - progress, 1.70) * ageGate;
-          float radiusHint = 0.24 + strength * 0.42 + motion * 0.22;
-          float travel = age * (0.92 + strength * 0.26 + motion * 0.34);
-          float packetWidth = radiusHint * (0.82 + motion * 0.24) + progress * 0.36;
-          float packet = expFalloff(behind - travel, packetWidth);
-          float divergentWidth = radiusHint * (0.24 + progress * 0.32) + behind * 0.018;
-          float divergentLine = abs(across) - behind * mix(0.36, 0.52, motion);
-          float divergent = expFalloff(divergentLine, divergentWidth);
-          divergent *= smoothstep(0.0, radiusHint * 0.42 + 0.055, behind);
-          divergent *= exp(-behind / (3.00 + motion * 1.55)) * packet * fade;
-          float transverseWidth = radiusHint * (1.18 + motion * 0.48) + behind * 0.19;
-          float transverse = expFalloff(across, transverseWidth);
-          transverse *= smoothstep(0.0, radiusHint * 0.55 + 0.070, behind);
-          transverse *= exp(-behind / (2.30 + motion * 1.12)) * packet * fade;
-          float side = across < 0.0 ? -1.0 : 1.0;
-          float amplitude = strength * (0.026 + motion * 0.016);
-          refraction += (-direction * transverse * 0.70 + tangent * side * divergent * 0.55) * amplitude;
-          rippleEnergy += (divergent + transverse) * strength * 0.42;
-          continue;
-        }
-
-        float d = length(offset);
-        vec2 radial = d > 0.001 ? offset / d : direction;
-        float fade = pow(1.0 - progress, 1.62) * ageGate;
-        float travel = age * uWaveSpeed;
-        float packetWidth = 0.130 + progress * 0.220 + strength * 0.036;
-        float signedDistance = d - travel;
-        float packet = expFalloff(signedDistance, packetWidth);
-        float crest = expFalloff(signedDistance, packetWidth * 0.42);
-        float trough = expFalloff(signedDistance + packetWidth * 0.64, packetWidth * 0.58);
-        float carrier = sin(signedDistance * mix(28.0, 18.0, progress));
-        float ripple = (crest - trough * 0.72 + carrier * packet * 0.12) * strength * fade;
-        float distanceDamp = inversesqrt(1.0 + d * 0.78);
-        refraction += radial * ripple * distanceDamp * 0.046;
-        rippleEnergy += abs(ripple) * distanceDamp;
-      }
-
-      return refraction;
-    }
-
-    // The jet-wake counterpart, mirroring flowRippleField in
-    // water/interaction-field.ts envelope for envelope and phase for phase. It
-    // keeps the center and shoulder waves and the nozzle, and drops the
-    // cross-ripple turbulence thread, which is below the resolution of a
-    // reflection.
-    vec2 flowJetRefraction(vec2 p, out float flowEnergy) {
-      vec2 refraction = vec2(0.0);
-      flowEnergy = 0.0;
-
-      for (int i = 0; i < ${maxFlowJets}; i++) {
-        if (i >= uFlowJetCount) {
-          break;
-        }
-
-        vec4 jet = uFlowJetData[i];
-        vec4 params = uFlowJetParams[i];
-        vec2 source = jet.xy;
-        vec2 direction = length(jet.zw) > 0.001 ? normalize(jet.zw) : vec2(1.0, 0.0);
-        vec2 tangent = vec2(-direction.y, direction.x);
-        float radius = max(params.x, 0.001);
-        float strength = params.y;
-        float phase = params.w;
-        vec2 offset = p - source;
-        float along = dot(offset, direction);
-        float across = dot(offset, tangent);
-        float downstream = smoothstep(-radius * 0.16, radius * 0.60, along);
-        float activeAlong = max(along, 0.0);
-        float lateralSpread = radius * (0.86 + activeAlong * 0.085);
-        float centerEnvelope = downstream
-          * expFalloff(across, lateralSpread)
-          * exp(-activeAlong / (radius * 7.8));
-        float shoulderDistance = abs(across) - radius * (0.72 + activeAlong * 0.022);
-        float shoulderEnvelope = downstream
-          * expFalloff(shoulderDistance, radius * 0.38 + activeAlong * 0.014)
-          * exp(-activeAlong / (radius * 6.2));
-        float nozzle = expFalloff(length(offset), radius * 1.18);
-        float centerWave = sin(activeAlong / radius * 3.10 - uTime * 1.86 + phase * 1.71) * centerEnvelope;
-        float shoulderWave = sin(activeAlong / radius * 5.20 - uTime * 2.42 + abs(across) / radius * 0.78 + phase) * shoulderEnvelope;
-        float side = across < 0.0 ? -1.0 : 1.0;
-        float force = strength * 30.0;
-
-        refraction += direction * (centerWave * 0.058 + nozzle * 0.030) * force;
-        refraction += tangent * side * shoulderWave * 0.040 * force;
-        flowEnergy += (abs(centerWave) * 0.46 + abs(shoulderWave) * 0.34 + nozzle * 0.32) * force;
-      }
-
-      return refraction;
-    }
 
     vec2 clampReflectionOffset(vec2 offset) {
       float distance = length(offset);
@@ -317,26 +139,18 @@ const reflectionVertexShader = `
         instancePosition = instanceMatrix * instancePosition;
       #endif
       vec4 worldPosition = modelMatrix * instancePosition;
-      float height = 0.0;
-      float simulationEnergy = 0.0;
-      float interactionEnergy = 0.0;
-      vec2 slope = simulatedSlope(worldPosition.xz, height, simulationEnergy);
-      vec2 interactionRefraction = interactionFieldRefraction(worldPosition.xz, interactionEnergy);
+      // Surface, caustics, and reflections see the same completed wave state.
+      // Two cached samples replace ten neighbor reads and a second slope model.
+      vec2 uv = clamp(simulationUv(worldPosition.xz), 0.001, 0.999);
+      vec4 wave = texture2D(uWaveStateMap, uv);
+      vec2 slope = texture2D(uWaveDerivedMap, uv).xy;
       vec2 shimmer = vec2(
         sin(worldPosition.z * 7.4 + uTime * 0.92) + sin((worldPosition.x + worldPosition.z) * 4.8 - uTime * 0.64),
         cos(worldPosition.x * 6.8 - uTime * 0.78) + sin((worldPosition.x - worldPosition.z) * 4.2 + uTime * 0.58)
       );
       float reflectionFade = smoothstep(-1.35, -0.04, worldPosition.y);
-      float motion = clamp(
-          abs(height) * 1.8
-            + simulationEnergy * 0.50
-          + interactionEnergy * 1.12
-          + length(slope) * 0.080,
-        0.0,
-        1.0
-      );
-      vec2 refractionOffset = slope * (0.034 + motion * 0.036) * (0.62 + reflectionFade * 0.46)
-        + interactionRefraction * (1.04 + reflectionFade * 0.40)
+      float motion = clamp(abs(wave.x) * 1.8 + wave.z * 0.75 + length(slope) * 0.080, 0.0, 1.0);
+      vec2 refractionOffset = slope * (0.058 + motion * 0.062) * (0.62 + reflectionFade * 0.46)
         + shimmer * (0.0025 + motion * 0.0065);
       refractionOffset = clampReflectionOffset(refractionOffset);
       worldPosition.xz += refractionOffset;
@@ -398,17 +212,10 @@ function createReflectionMaterial(uniforms: SharedWaterUniforms) {
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime: uniforms.uTime,
-      uHeightMap: uniforms.uHeightMap,
-      uInteractionFieldMap: uniforms.uInteractionFieldMap,
+      uWaveStateMap: uniforms.uWaveStateMap,
+      uWaveDerivedMap: uniforms.uWaveDerivedMap,
       uSimWorld: uniforms.uSimWorld,
       uPoolData: uniforms.uPoolData,
-      uWaveSpeed: uniforms.uWaveSpeed,
-      uRippleCenters: uniforms.uRippleCenters,
-      uRippleData: uniforms.uRippleData,
-      uRippleCount: uniforms.uRippleCount,
-      uFlowJetData: uniforms.uFlowJetData,
-      uFlowJetParams: uniforms.uFlowJetParams,
-      uFlowJetCount: uniforms.uFlowJetCount,
       uSceneDim: uniforms.uSceneDim,
       uOpacity: { value: 0.5 },
     },
