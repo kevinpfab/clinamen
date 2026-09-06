@@ -3,12 +3,6 @@ import {
   cameraOrbitDragSensitivity,
   cameraOrbitPitchSensitivity,
   cameraZoomSensitivity,
-  dragFastVelocityBlend,
-  dragSlowVelocityBlend,
-  dragStoppedVelocityRetention,
-  dragVelocitySampleWindow,
-  maxDragWorldSpeed,
-  velocityWorldScale,
 } from "../config";
 import type { Stage } from "../core/stage";
 import type { CameraControls } from "../core/camera-controls";
@@ -16,6 +10,11 @@ import type { BowlSystem } from "../bowls/system";
 import type { BowlBody } from "../bowls/types";
 import type { CameraOrbitDragState, DragState } from "./types";
 import type { RippleField } from "../water/ripples";
+import {
+  createDragVelocity,
+  pushDragVelocitySample,
+  readDragVelocity,
+} from "./drag-velocity";
 
 type PointerControllerDeps = {
   stage: Stage;
@@ -74,78 +73,13 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
     return new THREE.Vector2(pointerWorld.x, pointerWorld.z);
   }
 
-  function pushDragSample(state: DragState, point: THREE.Vector2, time: number) {
-    state.samples.push({
-      point: point.clone(),
-      time,
-    });
-
-    const cutoff = time - Math.max(0.16, dragVelocitySampleWindow * 2);
-    while (state.samples.length > 2 && state.samples[0].time < cutoff) {
-      state.samples.shift();
-    }
-
-    updateDragReleaseVelocity(state);
-  }
-
-  function getRecentDragVelocity(state: DragState) {
-    const last = state.samples[state.samples.length - 1];
-    let first = state.samples[state.samples.length - 2];
-
-    if (!first || !last) {
-      return new THREE.Vector2(0, 0);
-    }
-
-    for (let i = state.samples.length - 2; i >= 0; i -= 1) {
-      const sample = state.samples[i];
-      if (last.time - sample.time > dragVelocitySampleWindow) {
-        break;
-      }
-      first = sample;
-    }
-
-    if (first === last) {
-      return new THREE.Vector2(0, 0);
-    }
-
-    const duration = Math.max(0.008, last.time - first.time);
-    const worldVelocity = last.point.clone().sub(first.point).divideScalar(duration);
-
-    if (worldVelocity.length() > maxDragWorldSpeed) {
-      worldVelocity.setLength(maxDragWorldSpeed);
-    }
-
-    return worldVelocity.divideScalar(velocityWorldScale);
-  }
-
-  function updateDragReleaseVelocity(state: DragState) {
-    const recentVelocity = getRecentDragVelocity(state);
-    const recentSpeed = recentVelocity.length();
-    const last = state.samples[state.samples.length - 1];
-    const previous = state.samples[state.samples.length - 2];
-
-    if (recentSpeed <= 0.0001) {
-      const stationaryDuration = last && previous ? Math.max(0, last.time - previous.time) : 0;
-      state.releaseVelocity.multiplyScalar(Math.pow(dragStoppedVelocityRetention, stationaryDuration));
-      return;
-    }
-
-    const currentSpeed = state.releaseVelocity.length();
-    const blend = recentSpeed >= currentSpeed ? dragFastVelocityBlend : dragSlowVelocityBlend;
-    state.releaseVelocity.lerp(recentVelocity, blend);
-  }
-
-  function getDragVelocity(state: DragState) {
-    return state.releaseVelocity.clone();
-  }
-
   function moveDraggedBowl(state: DragState, point: THREE.Vector2, time: number) {
     const previous = new THREE.Vector2(state.bowl.mesh.position.x, state.bowl.mesh.position.z);
     const target = deps.bowlSystem.clampPointToBounds(state.bowl, point.add(state.offset));
     state.bowl.mesh.position.x = target.x;
     state.bowl.mesh.position.z = target.y;
-    pushDragSample(state, target, time);
-    state.bowl.velocity.copy(getDragVelocity(state));
+    pushDragVelocitySample(state.velocity, target, time);
+    state.bowl.velocity.copy(state.velocity.heldVelocity);
     deps.ripples.updateDragWaterInteraction(state, previous, target, time);
   }
 
@@ -210,6 +144,7 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
     if (!dragState) {
       return;
     }
+    dragState.bowl.velocity.set(0, 0);
     if (renderer.domElement.hasPointerCapture(dragState.pointerId)) {
       renderer.domElement.releasePointerCapture(dragState.pointerId);
     }
@@ -319,17 +254,16 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
     renderer.domElement.setPointerCapture(event.pointerId);
     const bowlPoint = new THREE.Vector2(bowl.mesh.position.x, bowl.mesh.position.z);
     const time = performance.now() / 1000;
+    const velocity = createDragVelocity(bowlPoint, time);
     dragState = {
       bowl,
       pointerId: event.pointerId,
       offset: bowlPoint.sub(point),
       lastRippleAt: time,
       lastRipplePoint: new THREE.Vector2(bowl.mesh.position.x, bowl.mesh.position.z),
-      releaseVelocity: new THREE.Vector2(0, 0),
-      samples: [],
+      velocity,
     };
     bowl.velocity.set(0, 0);
-    pushDragSample(dragState, new THREE.Vector2(bowl.mesh.position.x, bowl.mesh.position.z), time);
     renderer.domElement.classList.add("is-dragging");
   }
 
@@ -372,8 +306,8 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
 
     releasedBowl.mesh.position.x = releaseTarget.x;
     releasedBowl.mesh.position.z = releaseTarget.y;
-    pushDragSample(dragState, releaseTarget, releaseTime);
-    releasedBowl.velocity.copy(getDragVelocity(dragState));
+    pushDragVelocitySample(dragState.velocity, releaseTarget, releaseTime);
+    releasedBowl.velocity.copy(dragState.velocity.releaseVelocity);
     deps.bowlSystem.addMomentum(releasedBowl, releasedBowl.velocity.length() * 4.2);
     deps.ripples.emitDragReleaseRipple(dragState, releaseTime);
     releasedBowl.angularVelocity += THREE.MathUtils.clamp(
@@ -419,7 +353,14 @@ export function createPointerController(deps: PointerControllerDeps): PointerCon
   addDomListener("wheel", handleWheel, { passive: false });
 
   return {
-    getDraggedBowl: () => dragState?.bowl ?? null,
+    getDraggedBowl() {
+      if (!dragState) {
+        return null;
+      }
+      readDragVelocity(dragState.velocity, performance.now() / 1000);
+      dragState.bowl.velocity.copy(dragState.velocity.heldVelocity);
+      return dragState.bowl;
+    },
     cancelInteractions,
     dispose() {
       cancelInteractions();

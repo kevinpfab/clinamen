@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import type { DragVelocity } from "./drag-velocity";
 import type { BowlBody } from "../bowls/types";
 
 export type DragState = {
@@ -7,11 +8,7 @@ export type DragState = {
   offset: THREE.Vector2;
   lastRippleAt: number;
   lastRipplePoint: THREE.Vector2;
-  releaseVelocity: THREE.Vector2;
-  samples: Array<{
-    point: THREE.Vector2;
-    time: number;
-  }>;
+  velocity: DragVelocity;
 };
 
 export type CameraOrbitState = {
