@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { bowlFieldTextureSize, maxWaterBowls } from "../config";
+import { bowlFieldTextureSize, maxWaterBowls, maxDragWorldSpeed, velocityWorldScale } from "../config";
 import { basinMaskChunk, gaussianChunk } from "./shader-chunks";
 import type { SharedWaterUniforms } from "./uniforms";
 import { sampleBowlWaterContact, type BowlWaterContact } from "../bowls/profile";
@@ -30,6 +30,14 @@ const bowlFieldOptions = {
   generateMipmaps: false,
 };
 
+// Shared by geometry bounds and wave decay, so shortening slow wakes never
+// clips a long-decay field at an unrelated raster boundary.
+const bowlWakeLengthChunk = `
+  float bowlWakeLength(float radius, float speedRatio) {
+    return mix(radius * 0.9 + 0.18, radius * 3.15 + 1.15, smoothstep(0.04, 0.55, speedRatio));
+  }
+`;
+
 const bowlFieldVertexShader = `
   attribute vec4 aBowlData;
   attribute vec3 aBowlVelocity;
@@ -41,6 +49,8 @@ const bowlFieldVertexShader = `
   varying vec2 vDirection;
   varying vec2 vSplatUv;
   varying float vContactVisibility;
+
+  ${bowlWakeLengthChunk}
 
   void main() {
     vec2 center = aBowlData.xy;
@@ -55,7 +65,7 @@ const bowlFieldVertexShader = `
     // and a lateral flare that follows the V-wake opening angle.
     float aheadExtent = radius * 1.6 + 0.30;
     // Still bowls only need a compact contact patch.
-    float behindExtent = mix(aheadExtent, (radius * 3.15 + 1.15) * 2.2, smoothstep(0.0, 0.08, aBowlData.w));
+    float behindExtent = max(aheadExtent, bowlWakeLength(radius, aBowlData.w) * 2.2);
     float frontHalfWidth = radius * 1.7 + 0.42;
     float backHalfWidth = frontHalfWidth + behindExtent * 0.75;
 
@@ -88,6 +98,7 @@ const bowlFieldFragmentShader = `
 
   ${gaussianChunk}
   ${basinMaskChunk}
+  ${bowlWakeLengthChunk}
 
   void main() {
     vec2 p = vWorld;
@@ -105,6 +116,11 @@ const bowlFieldFragmentShader = `
     float d = length(offset);
     float rimWidth = 0.036 + radius * 0.034;
     float rim = gaussianBand(d, radius, rimWidth);
+    float footprint = 1.0 - smoothstep(radius - rimWidth * 0.35, radius + rimWidth * 0.20, d);
+    if (wakeStrength <= 0.001) {
+      gl_FragColor = vec4(rim * 0.012, rim * 0.105, rim * 0.56, footprint) * mask;
+      return;
+    }
     float ahead = dot(offset, direction);
     float behind = -ahead;
     float activeBehind = max(behind, 0.0);
@@ -125,7 +141,7 @@ const bowlFieldFragmentShader = `
     sternTrough *= expFalloff(across, radius * 0.62 + 0.16) * flow;
 
     float trail = smoothstep(0.02, radius * 0.42 + 0.16, behind);
-    trail *= exp(-activeBehind / (radius * 3.15 + 1.15)) * flow;
+    trail *= exp(-activeBehind / bowlWakeLength(radius, wakeStrength)) * flow;
 
     float vLine = abs(across) - activeBehind * (0.38 + motion * 0.13);
     float vWake = expFalloff(vLine, 0.064 + radius * 0.042 + activeBehind * 0.016);
@@ -157,7 +173,6 @@ const bowlFieldFragmentShader = `
       + shearWake * 0.150
       + transverseWake * 0.110;
     float meniscus = rim * (0.56 + wakeStrength * 0.30) + bowCrest * 0.16 + sideShoulder * 0.08;
-    float footprint = 1.0 - smoothstep(radius - rimWidth * 0.35, radius + rimWidth * 0.20, d);
 
     gl_FragColor = vec4(
       clamp(wakeHeight * mask, -1.0, 1.0),
@@ -239,7 +254,7 @@ export function createBowlField({ renderer, uniforms }: BowlFieldDeps): BowlFiel
         if (contact.visibility <= 0.001 || contact.radius <= 0) {
           continue;
         }
-        const wakeStrength = THREE.MathUtils.clamp(bowl.waterVelocity.length() * 8.5, 0, 1);
+        const wakeStrength = THREE.MathUtils.clamp(bowl.waterVelocity.length() * velocityWorldScale / maxDragWorldSpeed, 0, 1);
         bowlDataAttribute.array[splatCount * 4] = bowl.mesh.position.x;
         bowlDataAttribute.array[splatCount * 4 + 1] = bowl.mesh.position.z;
         bowlDataAttribute.array[splatCount * 4 + 2] = contact.radius;
