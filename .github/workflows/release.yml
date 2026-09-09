@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.14'
+
+      - name: Check release inputs
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Expected a stable version tag such as v0.1.0.' >&2
+            exit 1
+          fi
+          expected_bun=$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).packageManager')
+          test "bun@$(bun --version)" = "$expected_bun"
+
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun test
+      - run: bun run build
+
+      - name: Package bundle
+        run: |
+          commit=$(git rev-parse HEAD)
+          jq -n --arg version "$RELEASE_TAG" --arg commit "$commit" \
+            '{project: "clinamen", version: $version, commit: $commit}' > dist/build-info.json
+          test -f dist/index.html
+          mkdir -p release
+          tar -czf release/clinamen.tar.gz -C dist .
+          cd release
+          sha256sum clinamen.tar.gz > clinamen.tar.gz.sha256
+
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if is_draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'); then
+            if [[ "$is_draft" != true ]]; then
+              echo 'This release is already published; use a new version tag.' >&2
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG"
+          fi
+
+          # Only unpublished drafts may have their assets replaced on a retry.
+          gh release upload "$RELEASE_TAG" \
+            release/clinamen.tar.gz release/clinamen.tar.gz.sha256 --clobber
+          commit=$(git rev-parse HEAD)
+          checksum=$(cut -d ' ' -f 1 release/clinamen.tar.gz.sha256)
+          url="https://github.com/$GH_REPO/releases/download/$RELEASE_TAG/clinamen.tar.gz"
+          cat > release/notes.md <<EOF
+          Standalone Clinamen bundle for deployment under /clinamen/.
+
+          - Version: $RELEASE_TAG
+          - Source commit: $commit
+          - Archive: $url
+          - SHA-256: $checksum
+
+          The archive contains index.html and build-info.json at its root.
+          EOF
+          gh release edit "$RELEASE_TAG" --notes-file release/notes.md --draft=false
+          cat release/notes.md >> "$GITHUB_STEP_SUMMARY"
